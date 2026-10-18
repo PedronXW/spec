@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# specs — CLI interno do fluxo spec-anchored.
+# Comandos internos executados pelo AGENTE (o usuário nunca digita).
+set -uo pipefail
+
+SPECS_VERSION="1.0.0"
+SPECS_BIN="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+SPECS_ROOT="$(cd "$SPECS_BIN/.." && pwd)"
+export SPECS_VERSION SPECS_ROOT
+
+SPECS_LIB="$SPECS_BIN/../lib"
+. "$SPECS_LIB/specs.sh"
+. "$SPECS_LIB/commands.sh"
+
+specs_main "$@"
+exit $?

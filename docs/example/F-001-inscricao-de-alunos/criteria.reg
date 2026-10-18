@@ -1,0 +1,3 @@
+#AC-id	U-id	descricao	T-id
+AC-001	U-001	CPF valido aceito (parse ok)	T-001
+AC-002	U-001	CPF invalido recusado (parse lanca validacao)	T-001
