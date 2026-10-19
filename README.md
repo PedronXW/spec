@@ -45,6 +45,13 @@ O que você recebe sempre em português simples:
   janela limpa, sem tocar no que já passou.
 - **A prova** — auditoria mecânica: cada critério de aceite tem um teste que
   passou, ou a feature não está pronta. Verdict = exit code, não frase.
+- **Revisão em 3 camadas** — 1) nenhum commit/merge/push roda sem sua aprovação
+  no opencode (permission `ask`); 2) `specs auto-review` dá o veredito mecânico
+  da janela (6 checks, exit code); 3) deep review com os subagentes
+  `review-*` (segurança, performance, corretude, qualidade, testes, compat)
+  verifica padrão de código — não só "funciona". Auto-issues e
+  `changes-required` são **auto-corrigidos** na janela (máx. 3 iterações, com
+  transparência); se não convergir, para e você decide.
 
 ---
 
@@ -54,11 +61,14 @@ O que você recebe sempre em português simples:
 |----------|------|
 | Rastreabilidade de ponta a ponta | cada história, critério e tarefa tem código; cada AC aponta o teste que o prova (`criteria.reg` + `trace.tsv`) |
 | "Pronto" é veredito da máquina | `specs proof`/`specs gate` decidem; teste pulado não conta |
+| Nenhum commit sem revisão | permission `ask` no opencode (`*git*commit*`, `*git*merge*`, `*git*push*`, `*specs*integrate*`) — todo commit/merge exige seu allow |
+| Revisão verifica padrão de código | auto-review mecânico + deep review (subagentes `review-*`); `changes-required` bloqueia integrate/gate |
+| Auto-correção transparente | falhas mecânicas/deep são corrigidas na janela (máx. 3 iterações), sempre reportando o quê/porquê; sem convergir, para |
 | Suposições e perguntas obrigatórias | registradas com status; feature não fecha com A-/Q- aberto (`assumptions.reg`) |
 | Constituição do projeto | preset LGPD/educação com verificação executável, rastreada até arquivo:linha |
 | Lições com lastro | lição só entra ancorada em falha real; opinião solta é recusada (`specs lesson`) |
 | Execução paralela planejada | tarefas de arquivos disjuntos em worktrees/branches próprios, integração com dry-merge |
-| Escrita concorrente segura | travas (`flock`/mkdir atômico) em `prove`/`state`/`integrate`/`resolve` |
+| Escrita concorrente segura | travas (`flock`/mkdir atômico) em `prove`/`state`/`integrate`/`resolve`/`review` |
 
 ---
 
@@ -70,9 +80,13 @@ git clone <este repo> && cd spec
 # reinicie o opencode
 ```
 
+O `install.sh` também grava as regras de `permission` no opencode.json global
+(se não existirem): `*git*commit*`/`*git*merge*`/`*git*push*`/`*specs*integrate*`
+→ `ask`. Isso vale para todos os projetos desta máquina.
+
 Uso no opencode: `/specs`, `/specs-spec`, `/specs-plan`, `/specs-run`,
-`/specs-redo`, `/specs-status`, `/specs-audit`, `/specs-resolve`,
-`/specs-lesson`, `/specs-constitution`.
+`/specs-review`, `/specs-redo`, `/specs-status`, `/specs-audit`,
+`/specs-resolve`, `/specs-lesson`, `/specs-constitution`.
 
 ## Começar um projeto
 
@@ -110,9 +124,12 @@ specs new "nome da feature"                  # F-001-<slug>
 5. `specs reconcile F-001` → sem drift spec.md ↔ criteria.reg
 6. `specs prove [--strict] F-001 AC-001 "test -f seu_arquivo" T-001`
 7. `specs proof F-001` → exit 0 = PASS
-8. `specs gate F-001` → exit 0 = feature fecha
-   (plano são + sem drift + integradas + sem worktree órfão + prova ok +
-    constituição ok + sem A-/Q- abertas)
+8. `specs auto-review F-001 T-001` → exit 0 = auto-ok (6 checks mecânicos)
+9. `specs review F-001 T-001` → mostra o diff; `specs review F-001 T-001 --approve`
+10. `specs integrate F-001 T-001` → exit 0 (exige approved + sha + auto-ok)
+11. `specs gate F-001` → exit 0 = feature fecha
+    (plano são + sem drift + integradas + revisão aprovada + sem worktree órfão +
+     prova ok + constituição ok + sem A-/Q- abertas)
 
 Veja `docs/example/F-001-inscricao-de-alunos/` para uma feature completa.
 
@@ -121,7 +138,8 @@ Veja `docs/example/F-001-inscricao-de-alunos/` para uma feature completa.
 - `bin/specs` + `lib/specs.sh` (núcleo) + `lib/commands.sh` (subcomandos).
 - `make test` = lint + `tests/smoke.sh` + `tests/smoke-parallel.sh` (tudo num golpe).
 - `tests/smoke.sh` cobre o ciclo inteiro + novas garantias (drift, strict-skip,
-  worktree órfão, gate com constituição).
+  worktree órfão, gate com constituição, gate de revisão: integrate sem aprovação
+  falha, sha alterado pós-aprovação falha, auto-issues bloqueia).
 - `tests/smoke-parallel.sh` prova os refinamentos: escrita concorrente atômica
   (R2), status TSV parseável (R3), deps/integração e conflito de merge (R1).
 - `./install.sh` roda o lint antes de instalar.

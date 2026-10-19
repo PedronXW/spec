@@ -104,21 +104,73 @@ Com a escolha do usuário definida:
 1. Para cada tarefa paralela: `specs track <f> <T-id>` → abre janela limpa
    (worktree `trees/F-XXX/<T-id>` + branch `spec/<f>/<T-id>`).
 2. Informe o usuário: *"alterações vão rodar em background; a cada minuto posto
-   a tabela de andamento."*
+   a tabela de andamento."* **Nota**: com o gate de revisão, cada commit/merge
+   exige a aprovação do usuário no prompt — a execução não é 100% autônoma
+   por desenho.
 3. Rodem em background (linhas de comando em paralelo / sub-tarefas). Dentro de
    cada janela a tarefa: altera só seus arquivos, roda o `Run:` da janela,
    adiciona EXATAMENTE 1 commit com mensagem `T-###: <título>`. Só então chame
    `specs state <f> <T-id> done` (ou `failed`).
 4. **A cada ~1 minuto**: rode `specs status <f>` (formato mecânico), transforme
-   em **tabela de andamento** (qual roda, qual parou, o que concluiu/falhou)
-   e curta um **parágrafo-resumo em PT-BR**.
-5. Ao final: resumo completo em PT-BR + próximo passo (integrar/auditar).
+   em **tabela de andamento** (qual roda, qual parou, o que concluiu/falhou,
+   e o estado de revisão: `auto`, `deep`, `fixes`) e curta um **parágrafo-resumo
+   em PT-BR**.
+5. Ao final: resumo completo em PT-BR + próximo passo (`/specs-review`).
 
 Regras da execução:
 - 1 tarefa = 1 commit rastreável. `state.tsv` é a única verdade de estado.
-- Nunca edite `trace.tsv`, `criteria.reg`, `assumptions.reg` ou `state.tsv` à
-  mão enquanto houver execução concorrente — use os comandos `specs prove`,
-  `specs resolve`, `specs state` (eles travam a escrita).
+- Nunca edite `trace.tsv`, `criteria.reg`, `assumptions.reg`, `state.tsv` ou
+  `reviews.reg` à mão enquanto houver execução concorrente — use os comandos
+  `specs prove`, `specs resolve`, `specs state`, `specs review` (eles travam).
+- **Nenhum commit é feito sem a aprovação do usuário** (permission `ask` no
+  opencode) — e o commit só vale para integração depois de `auto-review` +
+  deep review + `specs review --approve`.
+
+### Auto-review (veredito mecânico da janela)
+Assim que a tarefa termina na janela: `specs auto-review <f> <T-id>` — 6 checks
+(exit code):
+1. diff ⊆ arquivos declarados em `Files:`;
+2. exatamente 1 commit na janela;
+3. `Run:` da janela re-executado → exit 0;
+4. ACs da tarefa existem com dono em `criteria.reg`;
+5. constituição scaneada sobre a worktree;
+6. sem skip no output do `Run:`.
+
+`auto-ok` (exit 0) → segue. `auto-issues` (exit 1) → **auto-fix** (abaixo).
+
+### Deep review (qualidade, não só "funciona")
+O auto-review mecânico NÃO basta: a janela também passa por **deep review** —
+os 6 subagentes `review-security`, `review-performance`, `review-correctness`,
+`review-quality`, `review-tests`, `review-compat` (read-only) lançados em
+paralelo, escopo = diff `git diff <base>...spec/<f>/<T-id>`. Consolide um
+relatório único estilo `/review`: status `APPROVED | CHANGES REQUIRED |
+APPROVED WITH SUGGESTIONS` + findings com severidade `file:line` e sugestão.
+Grave: `specs review <f> <T-id> --deep=<verdict>`. Persista o relatório em
+`reviews/<f>/<T-id>.md`.
+
+- `approved` / `approved-suggestions` → segue.
+- `changes-required` → **auto-fix**.
+- Ao final da execução, rode também um **deep review do tree integrado**
+  (diff acumulado contra o base) antes do gate.
+
+### Auto-fix (correção automática, transparência obrigatória)
+Quando `auto-issues` OU `changes-required`:
+1. Corrija **na mesma janela** conforme a causa:
+   - arquivo fora do `Files:` → reverte o fora-de-escopo, ou atualiza `Files:` se
+     a mudança é legítima;
+   - mais de 1 commit → squash em 1;
+   - `Run:` falhou → corrige o código até passar;
+   - AC sem dono → registra em `criteria.reg`;
+   - constituição violada → corrige o código;
+   - skip detectado → substitui por teste real.
+2. Registre a iteração: `specs review <f> <T-id> --fixes=1`.
+3. Repita `specs auto-review` + deep review até `auto-ok` + sem
+   `changes-required`, **MÁX. 3 iterações**.
+4. **Transparência**: sempre reporte na conversa *"corrigi X: por quê"* para
+   cada iteração — o fix fica visível no diff que o usuário revisa.
+5. Se após 3 iterações não convergiu → deixe como `auto-issues`/`changes-required`
+   e **pare**: o usuário decide (reject/rollback/revisão manual). `integrate` e
+   `gate` bloqueiam.
 
 ### Reexecução de faixa falha (`/specs-redo <T-id>`)
 Peça a reação de uma faixa E RECOMEÇA somente ela, do zero, numa janela limpa:
@@ -127,11 +179,22 @@ Não toque nas que passaram.
 
 ---
 
-## Fase 4 — Integração
+## Fase 4 — Revisão e Integração
 
+### Revisão (apresente, nunca presuma)
+Use `/specs-review` (ou os comandos internos):
+1. `specs review <f> <T-id>` → apresenta diff + status (`status`/`auto`/`deep`/`fixes`).
+2. Mostre o relatório consolidado do deep review (por janela e final).
+3. Espere a decisão do usuário e grave:
+   - `specs review <f> <T-id> --approve` → libera integração;
+   - `specs review <f> <T-id> --reject` → não integra.
+
+### Integração
 - Integre NA ORDEM das dependências: `specs integrate <f> <T-id>`.
-  - O comando verifica deps integradas, checa conflito (merge `--no-ff`) e
-    remove a janela ao final.
+  - O comando verifica deps integradas, checa conflito (merge `--no-ff`),
+    remove a janela ao final — **e exige**: `status=approved` + `sha` do branch
+    igual ao revisado + `auto-ok` + `deep` sem `changes-required`.
+  - Se o código mudou após a revisão (sha diferente), recusa: re-revise.
 - **Conflito?** O usuário pediu paralelismo — conflito real de arquivos é sinal
   de plano imperfeito. Resolva SEQUENCIALMENTE na árvore principal: integre a
   tarefa de menor prioridade, então a seguinte na ordem. Reprove os critérios
@@ -151,6 +214,8 @@ Não toque nas que passaram.
    - **sem drift spec.md ↔ criteria.reg** (`reconcile`),
    - todas as tarefas integradas,
    - **nenhum worktree órfão vivo** (`trees/`),
+   - **revisão de cada tarefa**: `status=approved` + `auto≠auto-issues` +
+     `deep≠changes-required`,
    - `proof` com todos os critérios provados e passando,
    - **constituição respeitada** (`constitution scan`),
    - nenhuma A-/Q- em aberto.
@@ -202,7 +267,17 @@ exit 0. Use `--strict` no audit quando a feature for crítica.
    violação (nem com scan não-verificável).
 7. **Spec e mecânica não divergem.** AC citada em spec.md mas não em criteria.reg
    (ou vice-versa) é drift e bloqueia o gate (`reconcile`).
-8. Responda e produza aparato sempre em **português simples** (salvo IDs/comandos).
+8. **Nenhum commit/merge/push sem a aprovação do usuário** (permission `ask`
+   no opencode). O commit em si só vale para integração depois de `auto-ok`
+   + deep review + `specs review --approve`.
+9. **Revisar é verificar funcionamento E padrão de código.** A janela passa
+   por `auto-review` mecânico (exit code) E por `deep review` (subagentes
+   `review-*`: segurança, performance, corretude, qualidade, testes, compat).
+   "Funciona" não é suficiente; `changes-required` bloqueia.
+10. **Auto-correção com transparência.** Auto-issues/`changes-required` são
+    corrigidos na janela (máx. 3 iterações) SEMPRE reportando o que e por quê;
+    se não convergir, para e o usuário decide.
+11. Responda e produza aparato sempre em **português simples** (salvo IDs/comandos).
 
 ## Comandos internos (referência rápida)
 
@@ -213,13 +288,18 @@ exit 0. Use `--strict` no audit quando a feature for crítica.
 | `specs plan-check [<f>]` | audita plano (disjunção, deps, ciclo) |
 | `specs track <f> <T-id> [--clean]` | abre/reabre janela limpa |
 | `specs state <f> <T-id> <st>` | registra estado sob lock (enum validado) |
-| `specs integrate <f> <T-id>` | integra na ordem, checa conflito |
+| `specs auto-review <f> <T-id>` | veredito MECÂNICO da janela (6 checks, exit code) |
+| `specs review <f> <T-id>` | mostra diff + status de revisão |
+| `specs review <f> <T-id> --approve\|--reject` | grava decisão do usuário (lock) |
+| `specs review <f> <T-id> --deep=<verdict>` | grava veredito do deep review (lock) |
+| `specs review <f> <T-id> --fixes=n` | registra iteração de auto-fix (lock) |
+| `specs integrate <f> <T-id>` | integra na ordem (exige approved+sha+auto-ok+deep ok) |
 | `specs prove [--strict] <f> <AC-id> <cmd> <T-id>` | registra prova de critério (lock) |
 | `specs resolve <f> <id> <status>` | fecha suposição/pergunta (lock) |
 | `specs status [<f>]` | tabela mecânica (TSV) para resumos |
 | `specs proof [--strict] [<f>]` | veredito executável (exit code) |
 | `specs reconcile [<f>]` | drift spec.md ↔ criteria.reg |
-| `specs gate <f>` | gate final (plano+drift+integra+worktrees+prova+const+abertas) |
+| `specs gate <f>` | gate final (plano+drift+integra+revisão+worktrees+prova+const+abertas) |
 | `specs constitution [scan]` | verifica constituição (exit 1 se violada/não-verificável) |
 | `specs lesson <arquivo.md>` | valida âncora de lição (exit 2 se não) |
 | `specs lesson add <arquivo.md>` | valida + anexa em lessons.md com L-#### |

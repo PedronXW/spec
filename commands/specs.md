@@ -17,8 +17,9 @@ Fase o pedido:
 - "roda" / "executa" → Fase 3 (Execução): janelas limpas, status a cada 1 min,
   resumo PT-BR.
 - "redobrar / reexecuta a faixa N" → `/specs-redo`.
+- "revisa / aprova / janela pronta" → `/specs-review` (auto-review + deep + aprovação).
 - "audita" / "prova" → Fase 5 (Auditoria): `specs proof [--strict]` e `specs gate`,
-  VEREDITO = exit code (inclui reconcile + constituição).
+  VEREDITO = exit code (inclui reconcile + constituição + revisão).
 - "constituição" → `specs constitution scan`.
 - "lição" → `specs lesson add <arquivo.md>` (valida + anexa com L-####).
 

@@ -88,18 +88,69 @@ step_ok "commit T-001 na janela"
 "$SPECS_BIN" state F-001 T-001 done >/dev/null || fail "state done"
 step_ok "state done"
 
+echo "== auto-review (deve passar) =="
+"$SPECS_BIN" auto-review F-001 T-001 >/dev/null 2>&1; rc=$?
+[ "$rc" -eq 0 ] || fail "auto-review rc=$rc (esperado 0)"
+step_ok "auto-review auto-ok"
+
+echo "== auto-issues: arquivo fora do Files: bloqueia integrate =="
+printf 'extra\n' > "$TREE/out_of_scope.ts"
+git -C "$TREE" add -A && git -C "$TREE" commit -qm "T-001: fora de escopo"
+"$SPECS_BIN" auto-review F-001 T-001 >/dev/null 2>&1; rc=$?
+[ "$rc" -ne 0 ] || fail "auto-review deveria acusar arquivo fora do Files:"
+"$SPECS_BIN" review F-001 T-001 --approve >/dev/null 2>&1
+"$SPECS_BIN" integrate F-001 T-001 >/dev/null 2>&1; rc=$?
+[ "$rc" -ne 0 ] || fail "integrate com auto-issues deveria falhar"
+# corrige a janela: remove o arquivo fora de escopo, squash de volta a 1 commit
+git -C "$TREE" rm -f out_of_scope.ts >/dev/null 2>&1
+git -C "$TREE" add -A
+git -C "$TREE" commit -qm "T-001: remove fora de escopo" >/dev/null 2>&1
+git -C "$TREE" reset -q --soft HEAD~2 2>/dev/null || true
+git -C "$TREE" commit -qm "T-001: validação de CPF" >/dev/null 2>&1
+"$SPECS_BIN" auto-review F-001 T-001 >/dev/null 2>&1; rc=$?
+[ "$rc" -eq 0 ] || fail "auto-review após correção rc=$rc"
+# zera a aprovação anterior para testar o gate de aprovação de novo
+printf 'T-001\topen\t\t\t\tauto-ok\tnot-run\t0\n' > "$FD/reviews.reg"
+step_ok "auto-issues bloqueia integrate + correção restaura auto-ok"
+
 echo "== prove =="
 "$SPECS_BIN" prove F-001 AC-001 "grep -q 'CPF' lib/cpf.ts" T-001 >/dev/null || fail "prove"
 [ "$(grep -c 'AC-001' "$FD/trace.tsv")" -eq 1 ] || fail "trace.tsv deve ter 1 linha AC-001"
 step_ok "prove regitrou 1 linha (upsert via lock)"
 
-echo "== integrate =="
+echo "== integrate SEM aprovação deve FALHAR =="
 "$SPECS_BIN" integrate F-001 T-001 >/dev/null 2>&1; rc=$?
-[ "$rc" -eq 0 ] || fail "integrate rc=$rc"
+[ "$rc" -ne 0 ] || fail "integrate sem aprovação deveria falhar (rc=$rc)"
+step_ok "integrate sem aprovação rejeitado"
+
+echo "== deep review + aprovação liberam integrate =="
+"$SPECS_BIN" review F-001 T-001 --deep=approved >/dev/null 2>&1 || fail "deep approved"
+"$SPECS_BIN" review F-001 T-001 --approve >/dev/null 2>&1 || fail "approve"
+"$SPECS_BIN" integrate F-001 T-001 >/dev/null 2>&1; rc=$?
+[ "$rc" -eq 0 ] || fail "integrate rc=$rc (esperado 0 após aprovação)"
 [ -d "$TREE" ] && fail "worktree deveria ter sido removido"
 STATUS="$( "$SPECS_BIN" status F-001 2>&1 )"
 case "$STATUS" in *"T-001"*"integrated"*) : ;; *) fail "status nao mostra integrated: $STATUS" ;; esac
-step_ok "integrate + worktree removido + status integrated"
+step_ok "deep+approve -> integrate + worktree removido + status integrated"
+
+echo "== prova: aprovar e depois mudar sha bloqueia integrate =="
+"$SPECS_BIN" track F-001 T-001 --clean >/dev/null 2>&1 || fail "track clean"
+TREE=".spec/trees/$FID/T-001"
+mkdir -p "$TREE/lib"
+printf '# CPF v2\n' > "$TREE/lib/cpf.ts"
+git -C "$TREE" add -A && git -C "$TREE" commit -qm "T-001: v2"
+"$SPECS_BIN" auto-review F-001 T-001 >/dev/null 2>&1; rc=$?
+[ "$rc" -eq 0 ] || fail "auto-review v2 rc=$rc"
+"$SPECS_BIN" review F-001 T-001 --deep=approved >/dev/null 2>&1
+"$SPECS_BIN" review F-001 T-001 --approve >/dev/null 2>&1
+printf '# CPF v3\n' > "$TREE/lib/cpf.ts"
+git -C "$TREE" add -A && git -C "$TREE" commit -qm "T-001: v3"
+"$SPECS_BIN" integrate F-001 T-001 >/dev/null 2>&1; rc=$?
+[ "$rc" -ne 0 ] || fail "integrate com sha alterado pós-aprovação deveria falhar"
+step_ok "sha alterado após aprovação bloqueia integrate"
+"$SPECS_BIN" review F-001 T-001 --approve >/dev/null 2>&1
+"$SPECS_BIN" integrate F-001 T-001 >/dev/null 2>&1; rc=$?
+[ "$rc" -eq 0 ] || fail "integrate após re-aprovação rc=$rc"
 
 echo "== proof no estado integrado =="
 "$SPECS_BIN" proof F-001 >/dev/null 2>&1; rc=$?

@@ -81,9 +81,16 @@ echo "== integrate T-002 ANTES de T-001 deve RAZÃO (deps) =="
 [ "$rc" -ne 0 ] || fail "integrate T-002 antes do T-001 deveria falhar (deps)"
 ok "integrate respeitou dep"
 
+# revisão + aprovação exigidas antes de integrar (gate de revisão)
+"$SPECS_BIN" auto-review F-001 T-001 >/dev/null 2>&1
+"$SPECS_BIN" review F-001 T-001 --deep=approved >/dev/null 2>&1
+"$SPECS_BIN" review F-001 T-001 --approve >/dev/null 2>&1
 "$SPECS_BIN" integrate F-001 T-001 >/dev/null 2>&1 || fail "integrate T-001"
+"$SPECS_BIN" auto-review F-001 T-002 >/dev/null 2>&1
+"$SPECS_BIN" review F-001 T-002 --deep=approved >/dev/null 2>&1
+"$SPECS_BIN" review F-001 T-002 --approve >/dev/null 2>&1
 "$SPECS_BIN" integrate F-001 T-002 >/dev/null 2>&1 || fail "integrate T-002"
-ok "integrate em ordem"
+ok "integrate em ordem (com revisão aprovada)"
 
 echo "== R1: conflito real de merge (mesmo arquivo, linhas diferentes) =="
 cat > "$FD/tasks/T-003.md" <<'EOF'
@@ -103,6 +110,9 @@ printf '# CPF v2 main\n' > lib/cpf.ts && git add -A && git commit -qm "main: cpf
 printf '# CPF v3 janela\n' > "$T3/lib/cpf.ts"
 git -C "$T3" add -A && git -C "$T3" commit -qm "T-003: cpf v3"
 "$SPECS_BIN" state F-001 T-003 done >/dev/null
+# aprova antes: o que deve falhar aqui é o CONFLITO, não o gate de revisão
+"$SPECS_BIN" review F-001 T-003 --deep=approved >/dev/null 2>&1
+"$SPECS_BIN" review F-001 T-003 --approve >/dev/null 2>&1
 "$SPECS_BIN" integrate F-001 T-003 >/dev/null 2>&1; rc=$?
 [ "$rc" -ne 0 ] || fail "integrate T-003 com conflito deveria falhar (rc=$rc)"
 git -C "$PWD" merge --abort >/dev/null 2>&1 || true
@@ -116,6 +126,8 @@ T3="$PWD/.spec/trees/$FID/T-003"
 printf 'relatorio\n' > "$T3/lib/cpf.ts"
 git -C "$T3" add -A && git -C "$T3" commit -qm "T-003: reexecutado"
 "$SPECS_BIN" state F-001 T-003 done >/dev/null
+"$SPECS_BIN" review F-001 T-003 --deep=approved >/dev/null 2>&1
+"$SPECS_BIN" review F-001 T-003 --approve >/dev/null 2>&1
 "$SPECS_BIN" integrate F-001 T-003 >/dev/null 2>&1 || fail "integrate após reexecução"
 ok "redexecução + integração limpa"
 

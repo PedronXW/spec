@@ -148,9 +148,11 @@ EOF
 EOF
 
   printf '#AC-id\tU-id\tdescricao\tT-id\n' > "$fdir/criteria.reg"
-  printf '#AC-id\tcomando-teste\tT-id\tstatus\tsha\n' > "$fdir/trace.tsv"
+  printf '#AC-id\tcomando-teste\tT-id\tstatus\tsha\tstrict\n' > "$fdir/trace.tsv"
   printf '#id\ttipo\tstatus\ttexto\n' > "$fdir/assumptions.reg"
   printf '#T-id\tstatus\tbranch\tsha\n' > "$fdir/state.tsv"
+  printf '#T-id\tstatus\treviewer\tsha\twhen\tauto\tdeep\tfixes\n' > "$fdir/reviews.reg"
+  mkdir -p "$fdir/reviews"
 
   specs_log "criada feature $fid-$slug em $fdir"
   printf 'edite: %s/spec.md\n' "$fdir"
@@ -388,6 +390,30 @@ specs_cmd_integrate() {
     return 1
   fi
 
+  # gate de revisão: status=approved + sha bate + auto-ok + deep não-changes-required
+  local rv_status rv_sha rv_auto rv_deep
+  rv_status="$(specs_review_field "$fdir" "$tid" 2)"
+  rv_sha="$(specs_review_field "$fdir" "$tid" 4)"
+  rv_auto="$(specs_review_field "$fdir" "$tid" 6)"
+  rv_deep="$(specs_review_field "$fdir" "$tid" 7)"
+  if [ "$rv_status" != "approved" ]; then
+    specs_err "$(printf '%s NÃO aprovado (status=%s). Rode '\''specs review %s %s'\'' e depois '\''specs review %s %s --approve'\''.' \
+      "$tid" "${rv_status:-open}" "$(specs_feature_id "$fdir")" "$tid" "$(specs_feature_id "$fdir")" "$tid")"
+    return 1
+  fi
+  if [ -n "$rv_sha" ] && [ "$rv_sha" != "$tree_sha" ]; then
+    specs_err "$(printf '%s aprovado para sha %s, mas o branch agora está em %s — código mudou após a revisão. Re-revise.' "$tid" "$rv_sha" "$tree_sha")"
+    return 1
+  fi
+  if [ "$rv_auto" = "auto-issues" ]; then
+    specs_err "$(printf '%s com auto-review reprovado (auto=%s). Corrija na janela e rode '\''specs auto-review'\'' até auto-ok.' "$tid" "$rv_auto")"
+    return 1
+  fi
+  if [ "$rv_deep" = "changes-required" ]; then
+    specs_err "$(printf '%s com deep review exigindo mudanças (deep=%s). Resolva antes de integrar.' "$tid" "$rv_deep")"
+    return 1
+  fi
+
   with_lock "integrate" specs_integrate_merge "$PROJECT_ROOT" "$branch"
   local rv=$?
   if [ "$rv" -eq 3 ]; then return 3; fi
@@ -423,6 +449,290 @@ specs_cmd_state() {
   local branch="${4:-}" sha="${5:-}"
   with_lock "state" specs_state_set "$fdir" "$tid" "$status" "$branch" "$sha"
   printf 'specs: %s -> %s\n' "$tid" "$status"
+}
+
+# -------------------------------------------------------- spec auto-review
+
+# L2 — veredito MECÂNICO da janela (detecta, NÃO edita). Exit 0 = auto-ok.
+specs_cmd_auto_review() {
+  specs_require_project || return 1
+  specs_require_git || return 1
+  local f="${1:-}" tid="${2:-}"
+  if [ -z "$f" ] || [ -z "$tid" ]; then
+    specs_err "use: specs auto-review <f> <T-id>"
+    return 1
+  fi
+  local fdir; fdir="$(specs_feature_dir "$f")"
+  [ -n "$fdir" ] || { specs_err "feature não encontrada: $f"; return 1; }
+  local fid; fid="$(specs_feature_id "$fdir")"
+  local branch; branch="$(specs_branch_of "$fdir" "$tid")"
+  local tdir; tdir="$(specs_tasks_dir "$fdir")"
+  local taskfile="$tdir/$tid.md"
+  [ -f "$taskfile" ] || { specs_err "task $tid não existe ($taskfile)"; return 1; }
+
+  if ! git -C "$PROJECT_ROOT" rev-parse --verify --quiet "$branch" >/dev/null; then
+    specs_err "branch %s não existe — janela não aberta. Abra com 'specs track'." "$branch"
+    return 1
+  fi
+
+  local failed=0
+  printf 'specs: auto-review %s %s\n' "$fid" "$tid"
+
+  # -- 1. diff ⊆ arquivos declarados em Files:
+  local declared files_changed fil ok
+  declared="$(specs_task_field "$taskfile" files)"
+  files_changed="$(git -C "$PROJECT_ROOT" diff --name-only "$(specs_default_branch)...$branch" 2>/dev/null)"
+  while IFS= read -r fil; do
+    [ -z "$fil" ] && continue
+    ok=0
+    while IFS= read -r d; do
+      [ -z "$d" ] && continue
+      case "$fil" in
+        "$d"|"$d"/*) ok=1 ;;
+      esac
+    done <<< "$declared"
+    if [ "$ok" -eq 0 ]; then
+      printf '  FAIL 1 — arquivo fora do Files:: %s\n' "$fil"
+      failed=1
+    fi
+  done <<< "$files_changed"
+  [ "$failed" -eq 0 ] && printf '  PASS 1 — diff dentro dos arquivos declarados\n'
+
+  # -- 2. exatamente 1 commit na janela (contra o merge-base com o branch padrão)
+  local base ncommits mb
+  mb="$(git -C "$PROJECT_ROOT" symbolic-ref --short HEAD 2>/dev/null)"
+  [ -n "$mb" ] || mb="main"
+  base="$(git -C "$PROJECT_ROOT" merge-base "$mb" "$branch" 2>/dev/null)"
+  if [ -n "$base" ]; then
+    ncommits="$(git -C "$PROJECT_ROOT" rev-list --count "$base..$branch" 2>/dev/null)"
+    if [ "$ncommits" -eq 1 ]; then
+      printf '  PASS 2 — janela com 1 commit\n'
+    else
+      printf '  FAIL 2 — janela tem %s commits (esperado 1)\n' "$ncommits"
+      failed=1
+    fi
+  else
+    printf '  WARN 2 — merge-base indisponível (pulei checagem de 1-commit)\n'
+  fi
+
+  # -- 3. re-executa o Run: da janela na worktree (exit 0)
+  local tree runcmd
+  tree="$PROJECT_ROOT/$SPECS_TREES_DIR/$fid/$tid"
+  runcmd="$(specs_task_field "$taskfile" run)"
+  if [ -n "$runcmd" ]; then
+    if [ -d "$tree" ] && (cd "$tree" && bash -c "$runcmd" >/dev/null 2>&1); then
+      printf '  PASS 3 — Run: da janela (exit 0)\n'
+    else
+      printf '  FAIL 3 — Run: da janela falhou: %s\n' "$runcmd"
+      failed=1
+    fi
+  else
+    printf '  WARN 3 — Run: vazio (sem comando de verificação definido)\n'
+  fi
+
+  # -- 4. ACs da tarefa existem com dono (criteria.reg)
+  local acs ac owner f4=0 f4err=0
+  acs="$(specs_task_field "$taskfile" ac | tr ',' ' ')"
+  for ac in $acs; do
+    [ -n "$ac" ] || continue
+    owner="$(specs_criteria_task_of "$fdir" "$ac")"
+    if [ -z "$owner" ]; then
+      printf '  FAIL 4 — AC %s sem registro em criteria.reg\n' "$ac"
+      f4err=1; failed=1
+    elif [ "$owner" = "$tid" ]; then
+      f4=1
+    else
+      printf '  FAIL 4 — AC %s pertence a %s, não a %s\n' "$ac" "$owner" "$tid"
+      f4err=1; failed=1
+    fi
+  done
+  if [ -n "$acs" ]; then
+    if [ "$f4err" -eq 0 ] && [ "$f4" -eq 1 ]; then
+      printf '  PASS 4 — ACs com dono na tarefa\n'
+    elif [ "$f4err" -eq 0 ]; then
+      printf '  FAIL 4 — nenhuma AC da tarefa registrada com dono\n'
+      failed=1
+    fi
+  else
+    printf '  WARN 4 — tarefa sem ACs declaradas\n'
+  fi
+
+  # -- 5. constituição sobre a worktree (scans com cwd na janela)
+  if [ -d "$tree" ]; then
+    local const_out
+    const_out="$(specs_constitution_scan_in "$tree" 2>&1)"
+    if printf '%s' "$const_out" | grep -q "VIOLADA"; then
+      printf '  FAIL 5 — constituição violada na janela\n'
+      printf '%s\n' "$const_out"
+      failed=1
+    else
+      printf '  PASS 5 — constituição respeitada na janela\n'
+    fi
+  else
+    printf '  WARN 5 — worktree ausente (pulei constituição da janela)\n'
+  fi
+
+  # -- 6. sem skip no output do Run:
+  if [ -n "$runcmd" ]; then
+    local out6
+    out6="$(cd "${tree:-$PROJECT_ROOT}" 2>/dev/null && bash -c "$runcmd" 2>&1)"
+    if printf '%s' "$out6" | grep -qiE 'skip(ped)?|pulad|pending|xit\b|it\.skip|describe\.skip|pytest\.mark\.skip|@Disabled|DISABLED'; then
+      printf '  FAIL 6 — saída do Run: indica teste pulado/skip\n'
+      failed=1
+    else
+      printf '  PASS 6 — sem skip no output\n'
+    fi
+  fi
+
+  # -- grava o veredito em reviews.reg (coluna auto), sob lock
+  local verdict="auto-ok"
+  [ "$failed" -eq 0 ] || verdict="auto-issues"
+  local now; now="$(date +%s)"
+  local cur_auto fixes
+  cur_auto="$(specs_review_field "$fdir" "$tid" 6)"
+  fixes="$(specs_review_field "$fdir" "$tid" 8)"; [ -n "$fixes" ] || fixes=0
+  # não incrementa fixes aqui — incrementa no auto-fix (agente roda auto-review de novo)
+  with_lock "review" specs_review_set "$fdir" "$tid" \
+    "$(specs_review_field "$fdir" "$tid" 2)" \
+    "$(specs_review_field "$fdir" "$tid" 3)" \
+    "$(specs_review_field "$fdir" "$tid" 4)" \
+    "$now" "$verdict" \
+    "$(specs_review_field "$fdir" "$tid" 7)" \
+    "$fixes"
+
+  printf 'specs: auto-review %s -> %s (exit %s)\n' "$tid" "$verdict" "$failed"
+  return $failed
+}
+
+# roda os scans da constituição com cwd em $1 (worktree da janela)
+specs_default_branch() {
+  local mb
+  mb="$(git -C "$PROJECT_ROOT" symbolic-ref --short HEAD 2>/dev/null)"
+  [ -n "$mb" ] || mb="main"
+  printf '%s' "$mb"
+}
+
+specs_constitution_scan_in() {
+  local dir="$1" file="$PROJECT_ROOT/$SPECS_SPEC_DIR/constitution.md"
+  [ -f "$file" ] || return 0
+  local rv=0 line cur_rule="(regra sem título)"
+  while IFS= read -r line; do
+    case "$line" in
+      "## "*) cur_rule="${line#\#\# }" ;;
+      "- scan:"*|'`scan:'*|"scan:"*)
+        local cmd
+        cmd="$(printf '%s' "$line" | sed -n 's/^[[:space:]]*\(-\?[[:space:]]*\)`*scan:[[:space:]]*//; s/`*[[:space:]]*$//p')"
+        [ -n "$cmd" ] || continue
+        local out
+        out="$(cd "$dir" && bash -c "$cmd" 2>&1)"
+        if [ -n "$out" ]; then
+          printf '#regra\t%s\n%s\n' "$cur_rule" "$out"
+          rv=1
+        fi
+        ;;
+    esac
+  done < "$file"
+  [ "$rv" -eq 0 ] || printf 'specs: constituição VIOLADA (exit 1)\n'
+  return "$rv"
+}
+
+# -------------------------------------------------------- spec review
+
+# L2 — mostra diff da janela + status de revisão; --approve|--reject grava decisão.
+specs_cmd_review() {
+  specs_require_project || return 1
+  specs_require_git || return 1
+  local action="show" deep="" fixes_val=""
+  for a in "$@"; do
+    case "$a" in
+      --approve) action=approve ;;
+      --reject) action=reject ;;
+      --deep=*) action=deep; deep="${a#--deep=}" ;;
+      --fixes=*) fixes_val="${a#--fixes=}" ;;
+    esac
+  done
+  local args=()
+  for a in "$@"; do
+    case "$a" in --approve|--reject|--deep=*|--fixes=*) : ;; *) args+=("$a") ;; esac
+  done
+  local f="${args[0]:-}" tid="${args[1]:-}"
+  if [ -z "$f" ] || [ -z "$tid" ]; then
+    specs_err "use: specs review <f> <T-id> [--approve|--reject|--deep=approved|approved-suggestions|changes-required|not-run]"
+    return 1
+  fi
+  local fdir; fdir="$(specs_feature_dir "$f")"
+  [ -n "$fdir" ] || { specs_err "feature não encontrada: $f"; return 1; }
+  local fid; fid="$(specs_feature_id "$fdir")"
+  local branch; branch="$(specs_branch_of "$fdir" "$tid")"
+
+  if [ -n "$fixes_val" ] && [ "$action" = "show" ]; then
+    # registra iteração de auto-fix (agente) sem alterar status
+    local cur_fixes; cur_fixes="$(specs_review_field "$fdir" "$tid" 8)"; [ -n "$cur_fixes" ] || cur_fixes=0
+    with_lock "review" specs_review_set "$fdir" "$tid" \
+      "$(specs_review_field "$fdir" "$tid" 2)" \
+      "$(specs_review_field "$fdir" "$tid" 3)" \
+      "$(specs_review_field "$fdir" "$tid" 4)" \
+      "$(specs_review_field "$fdir" "$tid" 5)" \
+      "$(specs_review_field "$fdir" "$tid" 6)" \
+      "$(specs_review_field "$fdir" "$tid" 7)" \
+      "$((cur_fixes + fixes_val))"
+    printf 'specs: %s fixes=%s\n' "$tid" "$((cur_fixes + fixes_val))"
+    return 0
+  fi
+
+  if [ "$action" = "deep" ]; then
+    case "$deep" in
+      approved|approved-suggestions|changes-required|not-run) : ;;
+      *) specs_err "deep inválido '$deep' (approved|approved-suggestions|changes-required|not-run)"; return 1 ;;
+    esac
+    local cur_fixes="${fixes_val:-$(specs_review_field "$fdir" "$tid" 8)}"
+    with_lock "review" specs_review_set "$fdir" "$tid" \
+      "$(specs_review_field "$fdir" "$tid" 2)" \
+      "$(specs_review_field "$fdir" "$tid" 3)" \
+      "$(specs_review_field "$fdir" "$tid" 4)" \
+      "$(specs_review_field "$fdir" "$tid" 5)" \
+      "$(specs_review_field "$fdir" "$tid" 6)" \
+      "$deep" \
+      "${cur_fixes:-0}"
+    printf 'specs: %s deep=%s\n' "$tid" "$deep"
+    return 0
+  fi
+
+  if [ "$action" = "approve" ] || [ "$action" = "reject" ]; then
+    if ! git -C "$PROJECT_ROOT" rev-parse --verify --quiet "$branch" >/dev/null; then
+      specs_err "branch %s não existe — nada a aprovar/rejeitar." "$branch"
+      return 1
+    fi
+    local sha; sha="$(git -C "$PROJECT_ROOT" rev-parse --short "$branch")"
+    local reviewer="${SPECS_REVIEWER:-}"
+    [ -n "$reviewer" ] || reviewer="$(git config user.name 2>/dev/null || echo "$USER")"
+    local status="open"
+    [ "$action" = "approve" ] && status="approved"
+    [ "$action" = "reject" ] && status="rejected"
+    local now; now="$(date +%s)"
+    with_lock "review" specs_review_set "$fdir" "$tid" "$status" "$reviewer" "$sha" "$now" \
+      "$(specs_review_field "$fdir" "$tid" 6)" \
+      "$(specs_review_field "$fdir" "$tid" 7)" \
+      "$(specs_review_field "$fdir" "$tid" 8)"
+    printf 'specs: %s %s (%s, sha %s)\n' "$tid" "$status" "$reviewer" "$sha"
+    return 0
+  fi
+
+  # -- show: diff + status
+  printf '#review\t%s\t%s\n' "$fid" "$tid"
+  if git -C "$PROJECT_ROOT" rev-parse --verify --quiet "$branch" >/dev/null; then
+    git -C "$PROJECT_ROOT" diff "$(specs_default_branch)...$branch" --stat
+    printf '\n#diff\n'
+    git -C "$PROJECT_ROOT" diff "$(specs_default_branch)...$branch"
+  else
+    printf 'janela não aberta (branch %s ausente)\n' "$branch"
+  fi
+  printf '\n#status\tstatus=%s\tauto=%s\tdeep=%s\tfixes=%s\n' \
+    "$(specs_review_field "$fdir" "$tid" 2)" \
+    "$(specs_review_field "$fdir" "$tid" 6)" \
+    "$(specs_review_field "$fdir" "$tid" 7)" \
+    "$(specs_review_field "$fdir" "$tid" 8)"
+  return 0
 }
 
 # -------------------------------------------------------- spec prove
@@ -532,14 +842,18 @@ specs_cmd_status() {
     local t
     for t in "$(specs_tasks_dir "$d")"/T-*.md; do
       [ -f "$t" ] || continue
-      local tid st br sha deps acs
+      local tid st br sha deps acs rvauto rvdeep rvfixes
       tid="$(basename "$t" .md)"
       st="$(specs_state_of "$d" "$tid" | cut -f2)"; [ -z "$st" ] && st="planned"
       br="$(specs_state_of "$d" "$tid" | cut -f3)"
       sha="$(specs_state_of "$d" "$tid" | cut -f4)"
       deps="$(specs_task_field "$t" deps)"
       acs="$(specs_task_field "$t" ac)"
-      printf 'T\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$fid" "$tid" "$st" "${br:-"-"}" "${sha:-"-"}" "${deps:-"-"}" "${acs:-"-"}"
+      rvauto="$(specs_review_field "$d" "$tid" 6)"; [ -z "$rvauto" ] && rvauto="not-run"
+      rvdeep="$(specs_review_field "$d" "$tid" 7)"; [ -z "$rvdeep" ] && rvdeep="not-run"
+      rvfixes="$(specs_review_field "$d" "$tid" 8)"; [ -z "$rvfixes" ] && rvfixes="0"
+      printf 'T\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$fid" "$tid" "$st" "${br:-"-"}" "${sha:-"-"}" "${deps:-"-"}" "${acs:-"-"}" "$rvauto" "$rvdeep" "$rvfixes"
     done
 
     # critérios
@@ -778,6 +1092,34 @@ specs_cmd_gate() {
 
   # 2.5. worktrees órfãos (A3) — nenhuma janela viva para as features
   specs_gate_orphan_check "${feats[@]}" || failed=1
+
+  # 2.6. revisão de cada tarefa (approved + sha + auto-ok + deep sem changes-required)
+  for fdir in "${feats[@]}"; do
+    local fid; fid="$(specs_feature_id "$fdir")"
+    for t in "$(specs_tasks_dir "$fdir")"/T-*.md; do
+      [ -f "$t" ] || continue
+      local tid st; tid="$(basename "$t" .md)"
+      st="$(specs_state_of "$fdir" "$tid" | cut -f2)"; [ -z "$st" ] && st="planned"
+      if [ "$st" = "integrated" ]; then
+        local rvst rvauto rvdeep
+        rvst="$(specs_review_field "$fdir" "$tid" 2)"
+        rvauto="$(specs_review_field "$fdir" "$tid" 6)"
+        rvdeep="$(specs_review_field "$fdir" "$tid" 7)"
+        if [ "$rvst" != "approved" ]; then
+          printf 'specs: GATE FAIL — %s integrada mas sem revisão aprovada (status=%s)\n' "$fid/$tid" "${rvst:-open}"
+          failed=1
+        fi
+        if [ "$rvauto" = "auto-issues" ]; then
+          printf 'specs: GATE FAIL — %s com auto-review reprovado\n' "$fid/$tid"
+          failed=1
+        fi
+        if [ "$rvdeep" = "changes-required" ]; then
+          printf 'specs: GATE FAIL — %s com deep review exigindo mudanças\n' "$fid/$tid"
+          failed=1
+        fi
+      fi
+    done
+  done
 
   # 3. prova mecânica
   if [ "$f" = "." ]; then

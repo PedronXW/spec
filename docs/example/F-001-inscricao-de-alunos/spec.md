@@ -22,3 +22,5 @@
 - `criteria.reg`: AC-001, AC-002 atribuídos à T-001.
 - `trace.tsv`: AC-001 → `npx vitest run src/enroll/contract.test.ts` (PASS).
 - `state.tsv`: T-001 → integrated.
+- `reviews.reg`: T-001 → approved · auto-ok · approved-suggestions · 1 fix.
+- `reviews/T-001.md`: relatório do deep review (6 tipos) — APPROVED WITH SUGGESTIONS.

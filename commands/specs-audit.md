@@ -13,13 +13,16 @@ Passos:
    - veredito: exit 0 = PASS, exit 1 = FAIL.
    - use `--strict` para garantir que teste pulado (skip) não valha como prova.
 2. Rode `specs reconcile [<f>]` — acusa drift entre spec.md e criteria.reg.
-3. Para fechamento completo, rode `specs gate <f>` — exige plano são, sem drift,
-   tudo integrado, sem worktree órfão, todos os critérios provados, constituição
-   respeitada e sem A-/Q- abertas.
-4. Apresente o resultado em PT-BR:
+3. Verifique a revisão de cada janela (`specs status <f>`): `status=approved`,
+   `auto≠auto-issues`, `deep≠changes-required`. Use `/specs-review` se ainda
+   não foi feita.
+4. Para fechamento completo, rode `specs gate <f>` — exige plano são, sem drift,
+   tudo integrado, revisão aprovada, sem worktree órfão, todos os critérios
+   provados, constituição respeitada e sem A-/Q- abertas.
+5. Apresente o resultado em PT-BR:
    - quais critérios provados e por qual comando (teste),
    - qual critério NÃO tem prova registrada (se houver),
-   - drift ou violação de constituição (se houver),
+   - drift, violação de constituição ou janela não aprovada (se houver),
    - o veredito como `#verdict … PASS|FAIL` por extenso.
 
 Você não declara vitória: **quem decide é o exit code.**

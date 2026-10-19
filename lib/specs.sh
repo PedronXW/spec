@@ -99,6 +99,8 @@ specs_criteria_file()    { printf '%s/criteria.reg' "$1"; }
 specs_trace_file()       { printf '%s/trace.tsv' "$1"; }
 specs_assumptions_file() { printf '%s/assumptions.reg' "$1"; }
 specs_state_file()       { printf '%s/state.tsv' "$1"; }
+specs_reviews_file()     { printf '%s/reviews.reg' "$1"; }
+specs_review_dir()       { printf '%s/reviews' "$1"; }
 specs_tasks_dir()        { printf '%s/tasks' "$1"; }
 
 # ------------------------------------------------------------ critérios ----
@@ -180,6 +182,40 @@ specs_state_of() {
   awk -F'\t' -v tid="$tid" '$1==tid{print; exit}' "$file"
 }
 
+# ------------------------------------------------------------- reviews ----
+
+# reviews.reg: T-id\tstatus(open|approved|rejected)\treviewer\tsha\twhen\tauto\tdeep\tfixes
+specs_review_list() {
+  local f="$1" file; file="$(specs_reviews_file "$f")"
+  [ -f "$file" ] || return 0
+  awk -F'\t' 'NF>=8 && $1 ~ /^T-/' "$file"
+}
+
+specs_review_of() {
+  local f="$1" tid="$2" file; file="$(specs_reviews_file "$f")"
+  [ -f "$file" ] || return 1
+  awk -F'\t' -v tid="$tid" '$1==tid{print; exit}' "$file"
+}
+
+specs_review_field() {
+  local f="$1" tid="$2" col="$3"
+  specs_review_of "$f" "$tid" | cut -f"$col"
+}
+
+# grava/atualiza a linha de revisão de uma tarefa (8 colunas)
+specs_review_set() {
+  local f="$1" tid="$2" status="$3" reviewer="$4" sha="$5" when="$6" auto="${7:-not-run}" deep="${8:-not-run}" fixes="${9:-0}"
+  local file; file="$(specs_reviews_file "$f")"
+  mkdir -p "$(dirname "$file")"
+  if [ ! -f "$file" ]; then printf '#T-id\tstatus\treviewer\tsha\twhen\tauto\tdeep\tfixes\n' > "$file"; fi
+  awk -F'\t' -v tid="$tid" -v st="$status" -v rv="$reviewer" -v sh="$sha" -v wh="$when" -v au="$auto" -v dp="$deep" -v fx="$fixes" '
+    BEGIN{OFS="\t"}
+    $1==tid { $2=st; $3=rv; $4=sh; $5=wh; $6=au; $7=dp; $8=fx; found=1; print; next }
+    { print }
+    END{ if(!found) printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", tid, st, rv, sh, wh, au, dp, fx }
+  ' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
+}
+
 specs_tasks_all() {
   local fdir="$1"; fdir="$(specs_tasks_dir "$fdir")"
   [ -d "$fdir" ] || return 0
@@ -237,11 +273,14 @@ USO:
   specs track <f> <T-id> [--clean]     abre janela limpa (worktree+branch)
   specs state <f> <T-id> <status> [branch [sha]]   atualiza estado (lock)
   specs integrate <f> <T-id>           integra janela (deps + dry-merge)
+  specs auto-review <f> <T-id>         veredito MECÂNICO da janela (6 checks, exit code)
+  specs review <f> <T-id>              mostra diff + status de revisão
+  specs review <f> <T-id> --approve|--reject   grava decisão sua (lock)
   specs prove [--strict] <f> <AC-id> <cmd> <T-id>   registra prova de critério (lock)
   specs resolve <f> <id> <status>      fecha suposição/pergunta (lock)
   specs status [<f>]                   tabela mecânica TSV de andamento
   specs proof [--strict] [<f>]         executa TODAS as provas -> exit code
-  specs gate <f>                       gate final (plano+integra+prova+const+reconcile+abertas)
+  specs gate <f>                       gate final (plano+integra+prova+const+reconcile+revisão+abertas)
   specs reconcile [<f>]                drift spec.md <-> criteria.reg
   specs constitution [scan]            rode verificações executáveis
   specs lesson <arquivo.md>            recusa lição sem âncora real (exit 2)
@@ -249,6 +288,7 @@ USO:
   specs help
 
 ESTADOS DE TAREFA: planned | running | done | failed | integrated
+REVISÃO: status(open|approved|rejected) · auto(not-run|auto-ok|auto-issues) · deep(not-run|approved|approved-suggestions|changes-required) · fixes(n)
 STRICT: teste pulado (skip) não conta como prova (falha mesmo com rc=0)
 
 FORMATOS (tab=\t):
@@ -256,6 +296,7 @@ FORMATOS (tab=\t):
   trace.tsv:        AC-id	comando-teste	T-id	status	sha	[strict]
   assumptions.reg:  id	tipo(A|Q)	status	texto
   state.tsv:        T-id	status	branch	sha
+  reviews.reg:      T-id	status	reviewer	sha	when	auto	deep	fixes
 EOF
 }
 
@@ -270,6 +311,8 @@ specs_main() {
     track)          specs_cmd_track "$@" ;;
     state)          specs_cmd_state "$@" ;;
     integrate)      specs_cmd_integrate "$@" ;;
+    auto-review)    specs_cmd_auto_review "$@" ;;
+    review)         specs_cmd_review "$@" ;;
     prove)          specs_cmd_prove "$@" ;;
     resolve)        specs_cmd_resolve "$@" ;;
     status)         specs_cmd_status "$@" ;;
