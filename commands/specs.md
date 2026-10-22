@@ -1,5 +1,5 @@
 ---
-description: Fluxo completo spec-anchored — especificando, planejando, executando, auditando com prova mecânica.
+description: Fluxo completo spec-anchored — especificando, desenvolvendo TDD, revisando e commitando com prova mecânica.
 ---
 
 # Specs — spec-anchored
@@ -10,17 +10,16 @@ usuário em prova mecânica, **nunca em opinião**.
 $ARGUMENTS
 
 Fase o pedido:
-- "especifica X" → Fase 1 (Especificação): `specs new <X>` + escrever spec.md,
-  criteria.reg e assumptions.reg; confessar suposições/perguntas abertas.
-- "plano" / "divide em tarefas" → Fase 2 (Plano): decompor em T-###, escrever
-  tasks/T-###.md, rodar `specs plan-check`, e PERGUNTAR o paralelismo.
-- "roda" / "executa" → Fase 3 (Execução): janelas limpas, status a cada 1 min,
-  resumo PT-BR.
-- "redobrar / reexecuta a faixa N" → `/specs-redo`.
-- "revisa / aprova / janela pronta" → `/specs-review` (auto-review + deep + aprovação).
-- "audita" / "prova" → Fase 5 (Auditoria): `specs proof [--strict]` e `specs gate`,
-  VEREDITO = exit code (inclui reconcile + constituição + revisão).
-- "constituição" → `specs constitution scan`.
-- "lição" → `specs lesson add <arquivo.md>` (valida + anexa com L-####).
+- "desenvolv/desarrolla/implementa X" → `/specs-develop` (pipeline TDD completo).
+- "especifica X" → Fase 0 (Especificação): `specs spec-open` + spec.md/criteria.reg/
+  assumptions.reg; **faça perguntas**; confesse suposições e resolva A-/Q-.
+- "escribe testes para X" → Fase 1: testes antes do código + `specs prove` T-SPEC.
+- "implementa/testes passam" → Fase 2: `specs gate <f> implement`.
+- "revisa / deep review" → Fase 4: deep review (6 subagentes) + corrigir achados.
+- "commita X" → Fase 5: `specs commit <f>`, **PARE e peça aprobación**, luego `--approve`.
+- "audita" / "prova" → `specs proof [--strict]` e `specs audit` (modo avançado).
+- "constitución" → `specs constitution scan`.
+- "lição" → `specs lesson add <arquivo.md>`.
 
-Cola sempre a saída dos comandos (a prova) na resposta.
+Cola sempre a saída dos comandos (a prova) na resposta. Nunca commites antes
+de la aprobación explícita del usuario.

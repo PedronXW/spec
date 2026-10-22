@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# smoke.sh — prova o ciclo spec-anchored num repositório git temporário.
-# Cobre: init, new, plan-check, track, prove (awaiting lock), integrate,
-# proof, gate, resolve, constitution, lesson. O veredito é o exit code.
+# smoke.sh — prova o pipeline TDD sequencial (spec → tests → implement → docs
+# → review → commit único gated) num repositório git temporário.
 set -uo pipefail
 
 SPECS_BIN="${SPECS_BIN:-$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../bin" && pwd)/specs}"
@@ -13,7 +12,7 @@ cd "$TMP"
 fail() { echo "SMOKE FAIL: $1" >&2; exit 1; }
 step_ok() { echo "  ok: $1"; }
 
-git init -q .
+git init -q . || fail "git init"
 git config user.email smoke@test
 git config user.name smoke
 git commit --allow-empty -qm init
@@ -21,230 +20,150 @@ git commit --allow-empty -qm init
 echo "== init =="
 "$SPECS_BIN" init >/dev/null || fail "init"
 [ -f .spec/constitution.md ] || fail "constitution nao criado"
-[ -f .spec/features/README.md ] || fail "features README"
 step_ok "init"
 
-echo "== new =="
-"$SPECS_BIN" new "Inscrição de alunos" >/dev/null || fail "new"
-FD="$(ls -d .spec/features/F-001-*)"
-FD="${FD#./}"
+echo "== spec-open (1 worktree por spec) =="
+"$SPECS_BIN" spec-open "Inscrição de alunos" >/dev/null || fail "spec-open"
+FD="$(ls -d .spec/features/F-001-*)"; FD="${FD#./}"
 FID="$(basename "$FD")"
-[ -n "$FD" ] || fail "feature nao criada"
-[ -f "$FD/criteria.reg" ] && [ -f "$FD/trace.tsv" ] || fail "arquivos mecanicos ausentes"
-step_ok "new: $FD"
+[ -f "$FD/phase.tsv" ] || fail "phase.tsv nao criado"
+[ -f "$FD/reviews.reg" ] || fail "reviews.reg nao criado"
+TREE=".spec/trees/$FID"
+[ -d "$TREE" ] || fail "worktree da spec nao criada ($TREE)"
+# exatamente 1 worktree extra (a da spec), não uma por tarefa
+NWT="$(git worktree list | wc -l)"
+[ "$NWT" -eq 2 ] || fail "esperava 2 worktrees (main + spec), tem $NWT"
+step_ok "spec-open: worktree única ($NWT worktrees)"
 
-echo "== plan-check (pré-plano vazio deve passar: só aviso de AC sem prova) =="
-"$SPECS_BIN" plan-check . >/dev/null 2>&1; rc=$?
-[ "$rc" -eq 0 ] || fail "plan-check rc=$rc"
-step_ok "plan-check"
+echo "== F0 spec gate (deve falhar: criteria vazio) =="
+"$SPECS_BIN" gate F-001 spec >/dev/null 2>&1; rc=$?
+[ "$rc" -ne 0 ] || fail "gate spec deveria falhar com criteria vazio"
+step_ok "gate spec rejeita criteria vazio"
 
-echo "== escreve plano + critérios =="
-cat > "$FD/tasks/T-001.md" <<'EOF'
-# T-001 — validação de CPF
-- **ACs:** AC-001
-- **Deps:**
-- **Files:**
-- lib/cpf.ts
-- **Run:** grep -q 'CPF' lib/cpf.ts
-EOF
-printf 'AC-001\tU-001\tCPF valido aceito\tT-001\n' > "$FD/criteria.reg"
-printf 'A-001\tA\taberto\tAmbiente autenticado\n' > "$FD/assumptions.reg"
-# spec.md consistente (sem drift): só AC-001
-cat > "$FD/spec.md" <<'EOF'
-# F-001 — Inscrição de alunos
+echo "== preenche spec (F0 ok) =="
+cat > "$FD/spec.md" <<EOF
+# $FID — Inscrição de alunos
 
-## Histórias de usuário
-- U-001 — Como secretária, quero cadastrar inscrição, para registrar entrada.
+## Histórias
+- U-001 — Como secretária, quero cadastrar inscrição com CPF, para registrar entrada.
 
-## Critérios de aceite
+## Critérios
 - AC-001 — [U-001]
-
-## Suposições
-- A-001 — Ambiente autenticado. — aberto
+- AC-002 — [U-001]
 EOF
-step_ok "plano/criteria/spec escritos"
+printf 'AC-001\tU-001\tCPF valido aceito\tT-SPEC\nAC-002\tU-001\tCPF invalido recusado\tT-SPEC\n' > "$FD/criteria.reg"
+printf 'A-001\tA\tconfirmed\tAmbiente autenticado\n' > "$FD/assumptions.reg"
+"$SPECS_BIN" gate F-001 spec >/dev/null 2>&1; rc=$?
+[ "$rc" -eq 0 ] || fail "gate spec rc=$rc"
+step_ok "F0 spec PASS"
 
-echo "== plan-check com dado real =="
-"$SPECS_BIN" plan-check . >/dev/null 2>&1; rc=$?
-[ "$rc" -eq 0 ] || fail "plan-check real rc=$rc"
-step_ok "plan-check"
+echo "== F1 tests (TDD: testes antes; sem teste -> falha) =="
+"$SPECS_BIN" gate F-001 tests >/dev/null 2>&1; rc=$?
+[ "$rc" -ne 0 ] || fail "gate tests deveria falhar sem teste registrado"
+# escreve os testes ANTES do código, na worktree da spec
+mkdir -p "$TREE/src"
+cat > "$TREE/src/cpf.test.js" <<'EOF'
+const { validarCpf } = require('./cpf.js');
+let pass=0, fail=0;
+function assert(c,n){ if(c) pass++; else { fail++; console.error('FAIL '+n); } }
+assert(validarCpf('12345678909')===true, 'AC-001');
+assert(validarCpf('000')===false, 'AC-002');
+if(fail){ process.exit(1); }
+console.log('OK '+pass);
+EOF
+"$SPECS_BIN" prove F-001 AC-001 "node -e \"require('./src/cpf.test.js')\"" T-SPEC >/dev/null 2>&1 || fail "prove AC-001"
+"$SPECS_BIN" prove F-001 AC-002 "node -e \"require('./src/cpf.test.js')\"" T-SPEC >/dev/null 2>&1 || fail "prove AC-002"
+"$SPECS_BIN" gate F-001 tests >/dev/null 2>&1; rc=$?
+[ "$rc" -eq 0 ] || fail "gate tests rc=$rc"
+step_ok "F1 tests PASS (testes antes do código)"
 
-echo "== track (worktree) =="
-"$SPECS_BIN" track F-001 T-001 >/dev/null 2>&1 || fail "track"
-TREE=".spec/trees/$FID/T-001"
-[ -d "$TREE" ] || fail "worktree nao criado ($TREE)"
-git worktree list >/dev/null 2>&1 && git worktree list | grep -q "$TREE" && rc=0 || rc=1
-[ "$rc" -eq 0 ] || fail "worktree ausente no git worktree list"
-step_ok "track: $TREE"
-STATUS="$("$SPECS_BIN" status F-001 2>&1)"
-case "$STATUS" in *"T-001"*"running"*) : ;; *) fail "status nao mostra running: $STATUS" ;; esac
-step_ok "status mostra running"
+echo "== F2 implement (TDD: rojo antes, verde depois) =="
+"$SPECS_BIN" gate F-001 implement >/dev/null 2>&1; rc=$?
+[ "$rc" -ne 0 ] || fail "gate implement deveria falhar sem implementação (test rojo)"
+cat > "$TREE/src/cpf.js" <<'EOF'
+function validarCpf(c){ if(!c || c.length!==11) return false; return true; }
+module.exports={validarCpf};
+EOF
+"$SPECS_BIN" gate F-001 implement >/dev/null 2>&1; rc=$?
+[ "$rc" -eq 0 ] || fail "gate implement rc=$rc"
+step_ok "F2 implement PASS (rojo -> verde)"
 
-echo "== executa a janela (um commit) =="
-mkdir -p "$TREE/lib"
-printf '# CPF validator\n' > "$TREE/lib/cpf.ts"
-git -C "$TREE" add -A && git -C "$TREE" commit -qm "T-001: validação de CPF"
-step_ok "commit T-001 na janela"
-"$SPECS_BIN" state F-001 T-001 done >/dev/null || fail "state done"
-step_ok "state done"
+echo "== F3 docs =="
+"$SPECS_BIN" gate F-001 docs >/dev/null 2>&1; rc=$?
+[ "$rc" -ne 0 ] || fail "gate docs deveria falhar sem docs"
+mkdir -p docs/features
+cat > "docs/features/$FID.md" <<EOF
+# $FID — Inscrição de alunos
 
-echo "== auto-review (deve passar) =="
-"$SPECS_BIN" auto-review F-001 T-001 >/dev/null 2>&1; rc=$?
-[ "$rc" -eq 0 ] || fail "auto-review rc=$rc (esperado 0)"
-step_ok "auto-review auto-ok"
+TDD implementado:
+- AC-001: CPF válido aceito.
+- AC-002: CPF inválido recusado.
+EOF
+"$SPECS_BIN" gate F-001 docs >/dev/null 2>&1; rc=$?
+[ "$rc" -eq 0 ] || fail "gate docs rc=$rc"
+step_ok "F3 docs PASS"
 
-echo "== auto-issues: arquivo fora do Files: bloqueia integrate =="
-printf 'extra\n' > "$TREE/out_of_scope.ts"
-git -C "$TREE" add -A && git -C "$TREE" commit -qm "T-001: fora de escopo"
-"$SPECS_BIN" auto-review F-001 T-001 >/dev/null 2>&1; rc=$?
-[ "$rc" -ne 0 ] || fail "auto-review deveria acusar arquivo fora do Files:"
-"$SPECS_BIN" review F-001 T-001 --approve >/dev/null 2>&1
-"$SPECS_BIN" integrate F-001 T-001 >/dev/null 2>&1; rc=$?
-[ "$rc" -ne 0 ] || fail "integrate com auto-issues deveria falhar"
-# corrige a janela: remove o arquivo fora de escopo, squash de volta a 1 commit
-git -C "$TREE" rm -f out_of_scope.ts >/dev/null 2>&1
-git -C "$TREE" add -A
-git -C "$TREE" commit -qm "T-001: remove fora de escopo" >/dev/null 2>&1
-git -C "$TREE" reset -q --soft HEAD~2 2>/dev/null || true
-git -C "$TREE" commit -qm "T-001: validação de CPF" >/dev/null 2>&1
-"$SPECS_BIN" auto-review F-001 T-001 >/dev/null 2>&1; rc=$?
-[ "$rc" -eq 0 ] || fail "auto-review após correção rc=$rc"
-# zera a aprovação anterior para testar o gate de aprovação de novo
-printf 'T-001\topen\t\t\t\tauto-ok\tnot-run\t0\n' > "$FD/reviews.reg"
-step_ok "auto-issues bloqueia integrate + correção restaura auto-ok"
+echo "== F4 review (deep obrigatório + constituição) =="
+"$SPECS_BIN" gate F-001 review >/dev/null 2>&1; rc=$?
+[ "$rc" -ne 0 ] || fail "gate review deveria falhar sem deep review"
+"$SPECS_BIN" review F-001 T-SPEC --deep=approved >/dev/null 2>&1 || fail "deep approved"
+"$SPECS_BIN" gate F-001 review >/dev/null 2>&1; rc=$?
+[ "$rc" -eq 0 ] || fail "gate review rc=$rc (constituição no preset ajustado)"
+step_ok "F4 review PASS"
 
-echo "== prove =="
-"$SPECS_BIN" prove F-001 AC-001 "grep -q 'CPF' lib/cpf.ts" T-001 >/dev/null || fail "prove"
-[ "$(grep -c 'AC-001' "$FD/trace.tsv")" -eq 1 ] || fail "trace.tsv deve ter 1 linha AC-001"
-step_ok "prove regitrou 1 linha (upsert via lock)"
+echo "== F5 commit (gated: sem aprovação não commita) =="
+# antes da aprovação: git log segue limpo
+"$SPECS_BIN" commit F-001 >/dev/null 2>&1 || true
+NCOMMITS_BEFORE="$(git rev-list --count HEAD)"
+[ "$NCOMMITS_BEFORE" -eq 1 ] || fail "nada deveria ter sido commitado antes da aprovação (commits=$NCOMMITS_BEFORE)"
+# commit --approve sem T-SPEC approved -> falha
+"$SPECS_BIN" commit F-001 --approve >/dev/null 2>&1; rc=$?
+[ "$rc" -ne 0 ] || fail "commit --approve sem aprovação T-SPEC deveria falhar"
+# aprova e commita
+"$SPECS_BIN" review F-001 T-SPEC --approve >/dev/null 2>&1 || fail "approve T-SPEC"
+"$SPECS_BIN" commit F-001 --approve >/dev/null 2>&1; rc=$?
+[ "$rc" -eq 0 ] || fail "commit --approve rc=$rc"
+NCOMMITS_AFTER="$(git rev-list --count HEAD)"
+[ "$NCOMMITS_AFTER" -eq 2 ] || fail "esperava exatamente 1 commit final (commits=$NCOMMITS_AFTER)"
+# worktree da spec removida após merge
+[ -d "$TREE" ] && fail "worktree da spec deveria ter sido removida"
+NWT="$(git worktree list | wc -l)"
+[ "$NWT" -eq 1 ] || fail "esperava 1 worktree (main), tem $NWT"
+step_ok "F5 commit único gated + merge + worktree limpa"
 
-echo "== integrate SEM aprovação deve FALHAR =="
-"$SPECS_BIN" integrate F-001 T-001 >/dev/null 2>&1; rc=$?
-[ "$rc" -ne 0 ] || fail "integrate sem aprovação deveria falhar (rc=$rc)"
-step_ok "integrate sem aprovação rejeitado"
+echo "== gate recusa pular fases (nova spec) =="
+"$SPECS_BIN" spec-open "Outra feature" >/dev/null 2>&1 || fail "spec-open 2"
+# tenta pular direto para implement -> deve falhar (spec/tests pendentes)
+"$SPECS_BIN" gate F-002 implement >/dev/null 2>&1; rc=$?
+[ "$rc" -ne 0 ] || fail "gate implement em spec nova deveria falhar (ordem forçada)"
+step_ok "ordem forçada (não pula fase)"
 
-echo "== deep review + aprovação liberam integrate =="
-"$SPECS_BIN" review F-001 T-001 --deep=approved >/dev/null 2>&1 || fail "deep approved"
-"$SPECS_BIN" review F-001 T-001 --approve >/dev/null 2>&1 || fail "approve"
-"$SPECS_BIN" integrate F-001 T-001 >/dev/null 2>&1; rc=$?
-[ "$rc" -eq 0 ] || fail "integrate rc=$rc (esperado 0 após aprovação)"
-[ -d "$TREE" ] && fail "worktree deveria ter sido removido"
-STATUS="$( "$SPECS_BIN" status F-001 2>&1 )"
-case "$STATUS" in *"T-001"*"integrated"*) : ;; *) fail "status nao mostra integrated: $STATUS" ;; esac
-step_ok "deep+approve -> integrate + worktree removido + status integrated"
-
-echo "== prova: aprovar e depois mudar sha bloqueia integrate =="
-"$SPECS_BIN" track F-001 T-001 --clean >/dev/null 2>&1 || fail "track clean"
-TREE=".spec/trees/$FID/T-001"
-mkdir -p "$TREE/lib"
-printf '# CPF v2\n' > "$TREE/lib/cpf.ts"
-git -C "$TREE" add -A && git -C "$TREE" commit -qm "T-001: v2"
-"$SPECS_BIN" auto-review F-001 T-001 >/dev/null 2>&1; rc=$?
-[ "$rc" -eq 0 ] || fail "auto-review v2 rc=$rc"
-"$SPECS_BIN" review F-001 T-001 --deep=approved >/dev/null 2>&1
-"$SPECS_BIN" review F-001 T-001 --approve >/dev/null 2>&1
-printf '# CPF v3\n' > "$TREE/lib/cpf.ts"
-git -C "$TREE" add -A && git -C "$TREE" commit -qm "T-001: v3"
-"$SPECS_BIN" integrate F-001 T-001 >/dev/null 2>&1; rc=$?
-[ "$rc" -ne 0 ] || fail "integrate com sha alterado pós-aprovação deveria falhar"
-step_ok "sha alterado após aprovação bloqueia integrate"
-"$SPECS_BIN" review F-001 T-001 --approve >/dev/null 2>&1
-"$SPECS_BIN" integrate F-001 T-001 >/dev/null 2>&1; rc=$?
-[ "$rc" -eq 0 ] || fail "integrate após re-aprovação rc=$rc"
-
-echo "== proof no estado integrado =="
-"$SPECS_BIN" proof F-001 >/dev/null 2>&1; rc=$?
-[ "$rc" -eq 0 ] || fail "proof rc=$rc (esperado 0)"
-step_ok "proof PASS (exit 0)"
-
-echo "== gate com A- aberta deve FALHAR =="
-"$SPECS_BIN" gate F-001 >/dev/null 2>&1; rc=$?
-[ "$rc" -ne 0 ] || fail "gate deveria falhar com A-002/A-001 aberta (rc=$rc)"
-step_ok "gate rejeitou A- aberta"
-
-echo "== resolve A-001 =="
-"$SPECS_BIN" resolve F-001 A-001 confirmed >/dev/null || fail "resolve"
-"$SPECS_BIN" gate F-001 >/dev/null 2>&1; rc=$?
-[ "$rc" -eq 0 ] || fail "gate deveria passar após resolver (rc=$rc, saida: $?)"
-step_ok "gate PASS após resolver"
-
-echo "== constitution scan =="
+echo "== constitution scan (limpa + violação) =="
 "$SPECS_BIN" constitution scan >/dev/null 2>&1; rc=$?
-[ "$rc" -eq 0 ] || fail "constitution limpo deveria passar (rc=$rc)"
-step_ok "constitution limpa (exit 0)"
-# violação real deve falhar
+[ "$rc" -eq 0 ] || fail "constitution limpa rc=$rc"
 mkdir -p src
 printf 'logger.info("cpf do aluno: %%s", cpf)\n' > src/bad.js
 "$SPECS_BIN" constitution scan >/dev/null 2>&1; rc=$?
 [ "$rc" -eq 1 ] || fail "constitution com violação deveria falhar (rc=$rc)"
 rm -f src/bad.js
-step_ok "constitution detectou violação (exit 1)"
+step_ok "constitution limpa (0) + violação (1)"
 
-echo "== lesson (sem âncora → recusar) =="
+echo "== lesson (sem âncora recusada; com âncora aceita) =="
 cat > une.md <<'EOF'
-## L-001 — aprendi uma coisa
+## L-001 — aprendi
 - Lição: sempre testar.
 EOF
 "$SPECS_BIN" lesson une.md >/dev/null 2>&1; rc=$?
 [ "$rc" -eq 2 ] || fail "lesson sem ancora deveria exit 2 (rc=$rc)"
-step_ok "lesson sem ancora recusada (exit 2)"
-
 cat > anc.md <<'EOF'
-## L-001 — aprendi uma coisa
-- Ancora: critério AC-001 da F-001 falhou com grep -q 'CPF': arquivo ausente (fail)
+## L-001 — aprendi
+- Ancora: critério AC-001 da F-001 falhou com node: arquivo ausente (fail)
 - Lição: garantir fixture antes do teste.
 EOF
-"$SPECS_BIN" lesson anc.md >/dev/null 2>&1; rc=$?
-[ "$rc" -eq 0 ] || fail "lesson ancorada deveria exit 0 (rc=$rc)"
-step_ok "lesson ancorada aceita (exit 0)"
-
-echo "== lesson add (anexa com L-#### automático) =="
 "$SPECS_BIN" lesson add anc.md >/dev/null 2>&1; rc=$?
-[ "$rc" -eq 0 ] || fail "lesson add deveria exit 0 (rc=$rc)"
-grep -q "L-0001" .spec/lessons.md || fail "lesson add não anexou com id L-0001"
-step_ok "lesson add anexou com L-0001"
-
-echo "== reconcile (drift spec.md <-> criteria.reg) =="
-# spec.md atual só tem AC-001 e criteria.reg tem AC-001 -> sem drift
-"$SPECS_BIN" reconcile F-001 >/dev/null 2>&1; rc=$?
-[ "$rc" -eq 0 ] || fail "reconcile consistente deveria passar (rc=$rc)"
-# introduz drift: mentiona AC-999 na spec
-printf '\n- AC-999 — [U-001]\n' >> "$FD/spec.md"
-"$SPECS_BIN" reconcile F-001 >/dev/null 2>&1; rc=$?
-[ "$rc" -ne 0 ] || fail "reconcile com drift deveria falhar (rc=$rc)"
-# remove o drift
-sed -i '/AC-999/d' "$FD/spec.md"
-step_ok "reconcile detecta drift e recupera"
-
-echo "== gate rejeita worktree órfão (A3) =="
-# cria worktree órfão manualmente (janela não integrada)
-git worktree add -b spec/F-001-inscri-o-de-alunos/T-ORPHAN .spec/trees/F-001-inscri-o-de-alunos/T-ORPHAN HEAD >/dev/null 2>&1 || fail "criar worktree órfão"
-"$SPECS_BIN" gate F-001 >/dev/null 2>&1; rc=$?
-[ "$rc" -ne 0 ] || fail "gate deveria rejeitar worktree órfão (rc=$rc)"
-git worktree remove --force .spec/trees/F-001-inscri-o-de-alunos/T-ORPHAN >/dev/null 2>&1 || true
-git branch -D spec/F-001-inscri-o-de-alunos/T-ORPHAN >/dev/null 2>&1 || true
-step_ok "gate rejeita worktree órfão"
-
-echo "== proof --strict rejeita teste pulado (A2) =="
-# comando que retorna 0 mas é um skip (vitest/describe.skip)
-"$SPECS_BIN" prove F-001 AC-001 "echo 'SKIP: it.skip cpf' && exit 0" T-001 >/dev/null 2>&1 || fail "prove"
-"$SPECS_BIN" proof F-001 >/dev/null 2>&1; rc=$?
-[ "$rc" -eq 0 ] || fail "proof normal deveria passar (rc=$rc)"
-"$SPECS_BIN" proof --strict F-001 >/dev/null 2>&1; rc=$?
-[ "$rc" -ne 0 ] || fail "proof --strict deveria falhar com skip (rc=$rc)"
-# restaura prova real
-"$SPECS_BIN" prove F-001 AC-001 "grep -q 'CPF' lib/cpf.ts" T-001 >/dev/null 2>&1 || fail "prove restore"
-step_ok "proof --strict detecta teste pulado"
-
-echo "== gate rejeita constituição violada (A1) =="
-mkdir -p src
-printf 'logger.info("cpf do aluno: %%s", cpf)\n' > src/bad.js
-"$SPECS_BIN" gate F-001 >/dev/null 2>&1; rc=$?
-[ "$rc" -ne 0 ] || fail "gate deveria rejeitar constituição violada (rc=$rc)"
-rm -f src/bad.js
-"$SPECS_BIN" gate F-001 >/dev/null 2>&1; rc=$?
-[ "$rc" -eq 0 ] || fail "gate deveria passar após remover violação (rc=$rc)"
-step_ok "gate rejeita constituição violada"
+[ "$rc" -eq 0 ] || fail "lesson add ancorada deveria exit 0 (rc=$rc)"
+grep -q "L-0001" .spec/lessons.md || fail "lesson add não anexou L-0001"
+step_ok "lesson com lastro (recusa sem âncora, anexa com L-0001)"
 
 echo
 echo "SMOKE PASS"

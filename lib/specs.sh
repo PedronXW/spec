@@ -101,7 +101,28 @@ specs_assumptions_file() { printf '%s/assumptions.reg' "$1"; }
 specs_state_file()       { printf '%s/state.tsv' "$1"; }
 specs_reviews_file()     { printf '%s/reviews.reg' "$1"; }
 specs_review_dir()       { printf '%s/reviews' "$1"; }
+specs_phase_file()       { printf '%s/phase.tsv' "$1"; }
 specs_tasks_dir()        { printf '%s/tasks' "$1"; }
+
+# --------------------------------------------------- trabalho de execução ----
+
+# Árvore ativa de uma feature: a worktree única da spec (caminho feliz) ou a
+# raiz do projeto (modo clássico/avançado). Toda escrita de código/teste e todo
+# proof/constitution roda na árvore ativa.
+specs_active_tree() {
+  local fdir="$1" cand top
+  cand="$PROJECT_ROOT/$SPECS_TREES_DIR/$(specs_feature_id "$fdir")"
+  if [ -d "$cand" ] && top="$(git -C "$cand" rev-parse --show-toplevel 2>/dev/null)" && [ "$top" = "$cand" ]; then
+    printf '%s' "$cand"
+    return 0
+  fi
+  printf '%s' "$PROJECT_ROOT"
+}
+
+# caminho da worktree única da spec (mesmo que ainda não exista)
+specs_spec_tree() {
+  printf '%s/%s' "$PROJECT_ROOT/$SPECS_TREES_DIR" "$(specs_feature_id "$1")"
+}
 
 # ------------------------------------------------------------ critérios ----
 
@@ -216,6 +237,45 @@ specs_review_set() {
   ' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
 }
 
+# --------------------------------------------------------------- phase ----
+
+# phase.tsv: fase\tstatus(pending|in_progress|done|blocked)
+specs_phase_list() {
+  local f="$1" file; file="$(specs_phase_file "$f")"
+  [ -f "$file" ] || return 0
+  awk -F'\t' 'NF==2 && $2 != ""' "$file"
+}
+
+specs_phase_status_of() {
+  local f="$1" phase="$2" file; file="$(specs_phase_file "$f")"
+  [ -f "$file" ] || return 1
+  awk -F'\t' -v p="$phase" '$1==p{print $2; exit}' "$file"
+}
+
+# grava/atualiza status de uma fase
+specs_phase_set() {
+  local f="$1" phase="$2" status="$3"
+  local file; file="$(specs_phase_file "$f")"
+  mkdir -p "$(dirname "$file")"
+  if [ ! -f "$file" ]; then
+    printf '#fase\tstatus\n' > "$file"
+    printf 'spec\tpending\n' >> "$file"
+    printf 'tests\tpending\n' >> "$file"
+    printf 'implement\tpending\n' >> "$file"
+    printf 'docs\tpending\n' >> "$file"
+    printf 'review\tpending\n' >> "$file"
+    printf 'commit\tpending\n' >> "$file"
+  fi
+  awk -F'\t' -v p="$phase" -v st="$status" '
+    BEGIN{OFS="\t"}
+    $1==p { $2=st; found=1; print; next }
+    { print }
+    END{ if(!found) printf "%s\t%s\n", p, st }
+  ' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
+}
+
+SPECS_PHASES=(spec tests implement docs review commit)
+
 specs_tasks_all() {
   local fdir="$1"; fdir="$(specs_tasks_dir "$fdir")"
   [ -d "$fdir" ] || return 0
@@ -269,25 +329,34 @@ specs — CLI interno do fluxo spec-anchored (quem executa é o AGENTE).
 USO:
   specs init [--no-constitution]       cria .spec/ no diretório atual
   specs new <nome feature> [<slug>]    cria F-XXX-<slug> + esqueleto
-  specs plan-check [<f>]               auditoria mecânica do plano
-  specs track <f> <T-id> [--clean]     abre janela limpa (worktree+branch)
-  specs state <f> <T-id> <status> [branch [sha]]   atualiza estado (lock)
-  specs integrate <f> <T-id>           integra janela (deps + dry-merge)
-  specs auto-review <f> <T-id>         veredito MECÂNICO da janela (6 checks, exit code)
+  specs spec-open <nome> [<slug>]      ABRE a spec: feature + worktree ÚNICA + phase.tsv
+  specs phase <f>                      mostra fases (spec|tests|implement|docs|review|commit)
+  specs phase <f> <fase> <status>      atualiza fase (lock)
+  specs gate <f> [<fase>]              gate da fase atual (ordem forzada, exit code)
+  specs commit <f>                     presenta diff final e estado do pipeline
+  specs commit <f> --approve           faz o COMMIT ÚNICO (aprovación tuya) + merge
+  specs plan-check [<f>]               auditoria mecânica do plano (modo avançado)
+  specs track <f> <T-id> [--clean]     abre janela limpa (modo avançado)
+  specs state <f> <T-id> <status> [branch [sha]]   atualiza estado (lock, avançado)
+  specs integrate <f> <T-id>           integra janela (modo avançado)
+  specs auto-review <f> <T-id>         veredito MECÁNICO da janela (modo avançado)
   specs review <f> <T-id>              mostra diff + status de revisão
   specs review <f> <T-id> --approve|--reject   grava decisão sua (lock)
   specs prove [--strict] <f> <AC-id> <cmd> <T-id>   registra prova de critério (lock)
   specs resolve <f> <id> <status>      fecha suposição/pergunta (lock)
   specs status [<f>]                   tabela mecânica TSV de andamento
   specs proof [--strict] [<f>]         executa TODAS as provas -> exit code
-  specs gate <f>                       gate final (plano+integra+prova+const+reconcile+revisão+abertas)
   specs reconcile [<f>]                drift spec.md <-> criteria.reg
   specs constitution [scan]            rode verificações executáveis
   specs lesson <arquivo.md>            recusa lição sem âncora real (exit 2)
   specs lesson add <arquivo.md>        valida e anexa com L-#### automático
   specs help
 
-ESTADOS DE TAREFA: planned | running | done | failed | integrated
+PIPELINE (fluxo padrão, sequencial): spec → tests → implement → docs → review → commit
+  - nenhun commit/merge antes de `specs commit --approve` (e permission ask).
+  - `specs gate <f>` força la ordem: não salta fase sem gate anterior done.
+
+ESTADOS DE TAREFA (modo avançado): planned | running | done | failed | integrated
 REVISÃO: status(open|approved|rejected) · auto(not-run|auto-ok|auto-issues) · deep(not-run|approved|approved-suggestions|changes-required) · fixes(n)
 STRICT: teste pulado (skip) não conta como prova (falha mesmo com rc=0)
 
@@ -297,6 +366,7 @@ FORMATOS (tab=\t):
   assumptions.reg:  id	tipo(A|Q)	status	texto
   state.tsv:        T-id	status	branch	sha
   reviews.reg:      T-id	status	reviewer	sha	when	auto	deep	fixes
+  phase.tsv:        fase	status(pending|in_progress|done|blocked)
 EOF
 }
 
@@ -307,6 +377,9 @@ specs_main() {
     version|-V)     printf 'specs %s\n' "$SPECS_VERSION"; return 0 ;;
     init)           specs_cmd_init "$@" ;;
     new)            specs_cmd_new "$@" ;;
+    spec-open)      specs_cmd_spec_open "$@" ;;
+    phase)          specs_cmd_phase "$@" ;;
+    gate)           specs_cmd_gate "$@" ;;
     plan-check)     specs_cmd_plan_check "$@" ;;
     track)          specs_cmd_track "$@" ;;
     state)          specs_cmd_state "$@" ;;
@@ -317,7 +390,8 @@ specs_main() {
     resolve)        specs_cmd_resolve "$@" ;;
     status)         specs_cmd_status "$@" ;;
     proof)          specs_cmd_proof "$@" ;;
-    gate)           specs_cmd_gate "$@" ;;
+    commit)         specs_cmd_commit "$@" ;;
+    audit)          specs_cmd_gate_final "$@" ;;
     reconcile)      specs_cmd_reconcile "$@" ;;
     constitution)   specs_cmd_constitution "$@" ;;
     lesson)         specs_cmd_lesson "$@" ;;

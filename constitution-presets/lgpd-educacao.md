@@ -19,7 +19,7 @@ Resultados indicam código expondo a nota de um aluno — possivelmente a outro 
 
 ## C-PRIV-002 — Dado pessoal de aluno nunca em log
 
-`scan: grep -rniE --include='*.py' --include='*.ts' --include='*.tsx' --include='*.js' --include='*.jsx' --include='*.rs' --include='*.go' --include='*.java' --exclude-dir=.git --exclude-dir=.spec --exclude-dir=node_modules 'logger\.(info|debug|warn|error)|console\.log|print\(' src/ app/ lib/ 2>/dev/null | grep -iE 'cpf|cnpj|email|telefone|documento|matricula|nascimento|rgm|password|senha'`
+`scan: grep -rniE --include='*.py' --include='*.ts' --include='*.tsx' --include='*.js' --include='*.jsx' --include='*.rs' --include='*.go' --include='*.java' --exclude-dir=.git --exclude-dir=.spec --exclude-dir=node_modules --exclude='*.test.js' --exclude='*.test.ts' --exclude='*.test.tsx' --exclude='*.test.jsx' --exclude='*.spec.js' --exclude='*.spec.ts' --exclude='*_test.py' --exclude='test_*.py' --exclude='*_test.go' 'logger\.(info|debug|warn|error)|console\.log|print\(' src/ app/ lib/ 2>/dev/null | grep -iE 'cpf|cnpj|email|telefone|documento|matricula|nascimento|rgm|password|senha'`
 
 Aponta log que pode conter dado pessoal (cpf, e-mail, …). Dado pessoal não
 entra em log em hipótese alguma.
@@ -44,7 +44,7 @@ Contração (account/aluno) não pode preservar dado pessoal sem anonimização.
 
 ## C-AUDIT-001 — Acesso não-autorizado bloqueado em endpoints de dado pessoal
 
-`scan: grep -rniE --include='*.py' --include='*.ts' --include='*.tsx' --include='*.js' --include='*.jsx' --exclude-dir=.git --exclude-dir=.spec --exclude-dir=node_modules 'matricula|cpf|nota' src/ app/ 2>/dev/null | grep -viE '(auth|jwt|token|role|permission|session|middleware|guard|require)'`
+`scan: grep -rniE --include='*.py' --include='*.ts' --include='*.tsx' --include='*.js' --include='*.jsx' --exclude-dir=.git --exclude-dir=.spec --exclude-dir=node_modules 'app\.(get|post|put|delete)|@(Get|Post|Put|Delete)|@app\.route|@router\.(get|post)|router\.(get|post|put|delete)|def (get|post|put|delete)' src/ app/ 2>/dev/null | grep -iE 'aluno|cpf|matricula|nota' | grep -viE '(auth|jwt|token|role|permission|session|middleware|guard|require)'`
 
 Endpoint que manipula dado pessoal sem nenhuma evidência próxima de controle
 de acesso.

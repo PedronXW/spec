@@ -160,6 +160,255 @@ EOF
   return 0
 }
 
+# -------------------------------------------------------- spec spec-open
+
+# Abre una spec: crea la feature (si no existe), abre SU worktree única y
+# inicializa phase.tsv. 1 spec = 1 worktree = 1 commit final.
+specs_cmd_spec_open() {
+  specs_require_project || return 1
+  specs_require_git || return 1
+  local nome="${1:-}"
+  if [ -z "$nome" ]; then
+    specs_err "use: specs spec-open <nome da spec> [<slug>]"
+    return 1
+  fi
+
+  # feature dir (existe? crea)
+  local fdir fd
+  fd="$(specs_feature_dir "$nome" 2>/dev/null)"
+  if [ -z "$fd" ]; then
+    local slug_arg="${2:-}"
+    specs_cmd_new "$nome" "$slug_arg" || return 1
+    fd="$(specs_feature_dir "$nome" 2>/dev/null)"
+    if [ -z "$fd" ]; then
+      # fallback: última feature creada
+      local last
+      last="$(ls -d "$PROJECT_ROOT/$SPECS_FEATURES_DIR"/F-* 2>/dev/null | tail -n1)"
+      [ -n "$last" ] && fd="$last"
+    fi
+  fi
+  [ -n "$fd" ] || { specs_err "no pude localizar la feature creada"; return 1; }
+  fdir="${fd%/}"
+  local fid; fid="$(specs_feature_id "$fdir")"
+  local branch="spec/$fid"
+  local tree; tree="$(specs_spec_tree "$fdir")"
+
+  # worktree única da spec
+  if git -C "$PROJECT_ROOT" rev-parse --verify --quiet "$branch" >/dev/null; then
+    specs_log "aviso: branch $branch ya existe (spec ya abierta)."
+  else
+    mkdir -p "$(dirname "$tree")"
+    git -C "$PROJECT_ROOT" worktree add -b "$branch" "$tree" HEAD || return 1
+  fi
+
+  # phase.tsv inicial
+  specs_phase_set "$fdir" spec pending
+  [ -f "$fdir/phase.tsv" ] || printf '#fase\tstatus\n' > "$fdir/phase.tsv"
+
+  # pipeline usa T-SPEC (não tarefas); remove o placeholder de task do template
+  rm -f "$fdir/tasks/T-001.md"
+  rmdir "$fdir/tasks" 2>/dev/null || true
+
+  printf 'specs: spec abierta %s\n' "$fid"
+  printf '  worktree: %s\n' "$tree"
+  printf '  branch:   %s\n' "$branch"
+  printf '  spec.md:  %s/spec.md\n' "$fdir"
+  printf '  siguiente: /specs-develop "%s"\n' "$nome"
+  return 0
+}
+
+# -------------------------------------------------------- spec phase
+
+specs_cmd_phase() {
+  specs_require_project || return 1
+  local f="${1:-}"
+  if [ -z "$f" ]; then
+    specs_err "use: specs phase <f> [<fase> <status>]"
+    return 1
+  fi
+  local fdir; fdir="$(specs_feature_dir "$f")"
+  [ -n "$fdir" ] || { specs_err "feature no encontrada: $f"; return 1; }
+
+  # modo get (2 args) / set (4 args)
+  if [ "$#" -ge 3 ]; then
+    local phase="$2" status="$3" ok=0 p
+    for p in "${SPECS_PHASES[@]}"; do [ "$p" = "$phase" ] && ok=1; done
+    [ "$ok" -eq 1 ] || { specs_err "fase inválida '$phase' (spec|tests|implement|docs|review|commit)"; return 1; }
+    case "$status" in pending|in_progress|done|blocked) : ;; *) specs_err "status inválido '$status'"; return 1 ;; esac
+    with_lock "phase" specs_phase_set "$fdir" "$phase" "$status"
+    printf 'specs: fase %s -> %s\n' "$phase" "$status"
+    return 0
+  fi
+
+  printf '#phase\t%s\n' "$(specs_feature_id "$fdir")"
+  if [ -f "$fdir/phase.tsv" ]; then
+    local p st
+    while IFS=$'\t' read -r p st; do
+      case "$p" in \#*|"") continue ;; esac
+      printf '%s\t%s\n' "$p" "$st"
+    done < "$fdir/phase.tsv"
+  fi
+  return 0
+}
+
+# -------------------------------------------------------- spec gate
+
+# Gate de una fase (o de la primera fase pendiente). Orden forzada:
+# no se puede pasar de fase sin que la anterior esté done.
+specs_cmd_gate() {
+  specs_require_project || return 1
+  local f="${1:-}"
+  if [ -z "$f" ]; then specs_err "use: specs gate <f> [<fase>]"; return 1; fi
+  local fdir; fdir="$(specs_feature_dir "$f")"
+  [ -n "$fdir" ] || { specs_err "feature no encontrada: $f"; return 1; }
+
+  local fase="${2:-}"
+  if [ -z "$fase" ]; then
+    # primera fase pendiente (no done)
+    local p
+    for p in "${SPECS_PHASES[@]}"; do
+      local st; st="$(specs_phase_status_of "$fdir" "$p")"
+      [ "$st" = "done" ] || { fase="$p"; break; }
+    done
+    [ -n "$fase" ] || { printf '#gate\t%s\ttodas-done\n' "$(specs_feature_id "$fdir")"; return 0; }
+  fi
+
+  # fase anterior debe estar done (orden forzada)
+  local prev_ok=1 prev=""
+  case "$fase" in
+    tests)     prev="spec" ;;
+    implement) prev="tests" ;;
+    docs)      prev="implement" ;;
+    review)    prev="docs" ;;
+    commit)    prev="review" ;;
+  esac
+  if [ -n "$prev" ]; then
+    local pst; pst="$(specs_phase_status_of "$fdir" "$prev")"
+    if [ "$pst" != "done" ]; then
+      specs_err "fase anterior '$prev' no está done (status=%s). No se puede saltar." "${pst:-pending}"
+      return 1
+    fi
+  fi
+
+  case "$fase" in
+    spec)     specs_gate_spec "$fdir" "$f" ;;
+    tests)    specs_gate_tests "$fdir" "$f" ;;
+    implement) specs_gate_implement "$fdir" "$f" ;;
+    docs)     specs_gate_docs "$fdir" "$f" ;;
+    review)   specs_gate_review "$fdir" "$f" ;;
+    commit)   specs_gate_commit "$fdir" "$f" ;;
+    *) specs_err "fase desconocida '$fase'"; return 1 ;;
+  esac
+  local rc=$?
+  if [ "$rc" -eq 0 ]; then
+    with_lock "phase" specs_phase_set "$fdir" "$fase" done
+    printf '#gate\t%s\t%s\tPASS\n' "$(specs_feature_id "$fdir")" "$fase"
+  else
+    with_lock "phase" specs_phase_set "$fdir" "$fase" blocked
+    printf '#gate\t%s\t%s\tFAIL\n' "$(specs_feature_id "$fdir")" "$fase"
+  fi
+  return "$rc"
+}
+
+# --- gates por fase --------------------------------------------------------
+
+# F0: spec documentada + suposiciones/perguntas resueltas
+specs_gate_spec() {
+  local fdir="$1" f="$2"
+  local failed=0
+  [ -s "$fdir/spec.md" ] || { specs_err "spec.md vacío o ausente"; failed=1; }
+  local nac; nac="$(awk -F'\t' '$1 ~ /^AC-/{n++} END{print n+0}' "$fdir/criteria.reg" 2>/dev/null)"
+  [ "$nac" -ge 1 ] || { specs_err "criteria.reg sin AC registrados"; failed=1; }
+  if [ -f "$fdir/assumptions.reg" ]; then
+    local id st
+    while IFS=$'\t' read -r id _ st _; do
+      case "$id" in \#*|"") continue ;; esac
+      case "$st" in
+        open|aberto) specs_err "suposición/pergunta $id en abierto ('$st') — resuelve antes"; failed=1 ;;
+      esac
+    done < "$fdir/assumptions.reg"
+  fi
+  return $failed
+}
+
+# F1 (TDD): cada AC tiene un test (trace.tsv con comando). Los tests se
+# escriben ANTES del código — el gate solo exige que exista el mapeo.
+specs_gate_tests() {
+  local fdir="$1" f="$2"
+  local failed=0 all_crit
+  all_crit="$(awk -F'\t' '$1 ~ /^AC-/{print $1}' "$fdir/criteria.reg" 2>/dev/null)"
+  if [ -z "$all_crit" ]; then specs_err "sin AC en criteria.reg"; return 1; fi
+  local ac
+  while IFS= read -r ac; do
+    [ -n "$ac" ] || continue
+    local cmd; cmd="$(specs_trace_cmd_of "$fdir" "$ac")"
+    if [ -z "$cmd" ]; then
+      specs_err "AC $ac sin test registrado en trace.tsv (escribe el test ANTES del código)"
+      failed=1
+    fi
+  done <<< "$all_crit"
+  return $failed
+}
+
+# F2: implementar hasta que los tests pasen
+specs_gate_implement() {
+  local fdir="$1" f="$2"
+  specs_proof_feature "$fdir" "$f" || return 1
+  return 0
+}
+
+# F3: documentar lo hecho (changelog/docs citando cada AC)
+specs_gate_docs() {
+  local fdir="$1" f="$2"
+  local fid; fid="$(specs_feature_id "$fdir")"
+  local docs="$PROJECT_ROOT/docs/features/$fid.md"
+  if [ ! -f "$docs" ]; then
+    specs_err "docs ausente: $docs (documenta lo que se hizo, citando cada AC)"
+    return 1
+  fi
+  local ac all_crit failed=0
+  all_crit="$(awk -F'\t' '$1 ~ /^AC-/{print $1}' "$fdir/criteria.reg" 2>/dev/null)"
+  while IFS= read -r ac; do
+    [ -n "$ac" ] || continue
+    if ! grep -q "$ac" "$docs"; then
+      specs_err "docs no cita $ac"
+      failed=1
+    fi
+  done <<< "$all_crit"
+  return $failed
+}
+
+# F4: revisión automática (deep review aprobado + constitución ok)
+specs_gate_review() {
+  local fdir="$1" f="$2"
+  local failed=0
+  # deep review: el AGENTE corre los 6 subagentes review-* y graba el veredicto.
+  local deep; deep="$(specs_review_field "$fdir" "T-SPEC" 7)"
+  case "$deep" in
+    approved|approved-suggestions) : ;;
+    *)
+      specs_err "$(printf 'deep review no aprobado (deep=%s). Ejecuta el deep review (6 subagentes) y graba: specs review %s T-SPEC --deep=<verdict>.' "${deep:-not-run}" "$(specs_feature_id "$fdir")")"
+      failed=1 ;;
+  esac
+  # constitución sobre la árvore activa
+  if ! specs_constitution_scan_in "$(specs_active_tree "$fdir")" >/dev/null 2>&1; then
+    specs_err "constitución violada en la spec"
+    failed=1
+  fi
+  return $failed
+}
+
+# F5: commit final (solo con aprobación explícita)
+specs_gate_commit() {
+  local fdir="$1" f="$2"
+  local st; st="$(specs_review_field "$fdir" "T-SPEC" 2)"
+  if [ "$st" != "approved" ]; then
+    specs_err "spec NO aprovada (status=%s). Presenta el diff y espera la aprobación, luego specs commit %s --approve." "${st:-open}" "$(specs_feature_id "$fdir")"
+    return 1
+  fi
+  return 0
+}
+
 # -------------------------------------------------------- spec plan-check
 
 specs_cmd_plan_check() {
@@ -699,14 +948,20 @@ specs_cmd_review() {
   fi
 
   if [ "$action" = "approve" ] || [ "$action" = "reject" ]; then
-    if ! git -C "$PROJECT_ROOT" rev-parse --verify --quiet "$branch" >/dev/null; then
-      specs_err "branch %s não existe — nada a aprovar/rejeitar." "$branch"
-      return 1
+    local sha="-" reviewer status
+    if [ "$tid" = "T-SPEC" ]; then
+      # sentinel a nível de spec (pipeline): sin branch, sha = árbol activo
+      sha="$(git -C "$(specs_active_tree "$fdir")" rev-parse --short HEAD 2>/dev/null || echo '-')"
+    else
+      if ! git -C "$PROJECT_ROOT" rev-parse --verify --quiet "$branch" >/dev/null; then
+        specs_err "branch %s não existe — nada a aprovar/rejeitar." "$branch"
+        return 1
+      fi
+      sha="$(git -C "$PROJECT_ROOT" rev-parse --short "$branch")"
     fi
-    local sha; sha="$(git -C "$PROJECT_ROOT" rev-parse --short "$branch")"
-    local reviewer="${SPECS_REVIEWER:-}"
+    reviewer="${SPECS_REVIEWER:-}"
     [ -n "$reviewer" ] || reviewer="$(git config user.name 2>/dev/null || echo "$USER")"
-    local status="open"
+    status="open"
     [ "$action" = "approve" ] && status="approved"
     [ "$action" = "reject" ] && status="rejected"
     local now; now="$(date +%s)"
@@ -838,7 +1093,17 @@ specs_cmd_status() {
 
     printf '#feature\t%s\n' "$fid"
 
-    # tarefas
+    # árvore ativa + fases do pipeline
+    printf 'TREE\t%s\t%s\n' "$fid" "$(specs_active_tree "$d")"
+    if [ -f "$d/phase.tsv" ]; then
+      local p st
+      while IFS=$'\t' read -r p st; do
+        case "$p" in \#*|"") continue ;; esac
+        printf 'PHASE\t%s\t%s\t%s\n' "$fid" "$p" "$st"
+      done < "$d/phase.tsv"
+    fi
+
+    # tarefas (modo avançado)
     local t
     for t in "$(specs_tasks_dir "$d")"/T-*.md; do
       [ -f "$t" ] || continue
@@ -916,11 +1181,12 @@ specs_proof_one() {
   local fdir="$1" force_strict="${2:-0}"
   local fid; fid="$(specs_feature_id "$fdir")"
   local trace; trace="$(specs_trace_file "$fdir")"
+  local run_dir; run_dir="$(specs_active_tree "$fdir")"
   local failed=0
 
-  printf 'specs: proof %s\n' "$fid"
+  printf 'specs: proof %s (árbol: %s)\n' "$fid" "$run_dir"
   if [ ! -f "$trace" ]; then
-    printf '  FAIL: nenhum trace.tsv — feature sem critério provado.\n'
+    printf '  FAIL: nenhun trace.tsv — feature sem critério provado.\n'
     return 1
   fi
 
@@ -957,10 +1223,10 @@ specs_proof_one() {
     printf '  RUN  %s -> %s\n' "$ac" "$cmd"
     local runrc out
     if [ "$have_timeout" -eq 1 ]; then
-      out="$(cd "$PROJECT_ROOT" && timeout 300 bash -c "$cmd" 2>&1)"
+      out="$(cd "$run_dir" && timeout 300 bash -c "$cmd" 2>&1)"
       runrc=$?
     else
-      out="$(cd "$PROJECT_ROOT" && bash -c "$cmd" 2>&1)"
+      out="$(cd "$run_dir" && bash -c "$cmd" 2>&1)"
       runrc=$?
     fi
     # A2 — strict: teste pulado não é prova. Skip de runner = falha mesmo rc=0.
@@ -982,6 +1248,86 @@ specs_proof_one() {
   done < "$trace"
 
   return $failed
+}
+
+# proof de una feature específica (exit code puro, sin ruido de "todas")
+specs_proof_feature() {
+  local fdir="$1" f="${2:-}"
+  specs_proof_one "$fdir" 0
+  return $?
+}
+
+# -------------------------------------------------------- spec commit
+
+# F5 — presenta el diff final y, con --approve, hace el COMMIT ÚNICO + merge.
+specs_cmd_commit() {
+  specs_require_project || return 1
+  specs_require_git || return 1
+
+  local approve=0
+  for a in "$@"; do [ "$a" = "--approve" ] && approve=1; done
+  local args=()
+  for a in "$@"; do [ "$a" = "--approve" ] || args+=("$a"); done
+  local f="${args[0]:-}"
+  if [ -z "$f" ]; then specs_err "use: specs commit <f> [--approve]"; return 1; fi
+  local fdir; fdir="$(specs_feature_dir "$f")"
+  [ -n "$fdir" ] || { specs_err "feature no encontrada: $f"; return 1; }
+  local fid; fid="$(specs_feature_id "$fdir")"
+  local tree; tree="$(specs_active_tree "$fdir")"
+  local mb; mb="$(specs_default_branch)"
+
+  # todas las fases previas deben estar done
+  local p st
+  for p in "${SPECS_PHASES[@]}"; do
+    [ "$p" = "commit" ] && continue
+    st="$(specs_phase_status_of "$fdir" "$p")"
+    [ "$st" = "done" ] || { specs_err "fase $p no done (status=%s) — usa 'specs gate %s %s'." "${st:-pending}" "$fid" "$p"; return 1; }
+  done
+
+  # diff final del working tree vs base
+  printf '#commit\t%s\n' "$fid"
+  printf '#arbol\t%s\n' "$tree"
+  git -C "$tree" status --porcelain | head -50
+  printf '\n#diff\n'
+  git -C "$tree" diff --stat "$mb"
+  git -C "$tree" diff --stat
+
+  if [ "$approve" -eq 0 ]; then
+    printf '\nspecs: aprobación pendiente. Revisa el diff y, si estás de acuerdo: specs commit %s --approve\n' "$fid"
+    return 0
+  fi
+
+  # aprobación explícita (T-SPEC en reviews.reg)
+  local rvst; rvst="$(specs_review_field "$fdir" "T-SPEC" 2)"
+  if [ "$rvst" != "approved" ]; then
+    specs_err "T-SPEC no aprobado (status=%s). Usa 'specs review %s T-SPEC --approve'." "${rvst:-open}" "$fid"
+    return 1
+  fi
+
+  # nada pendiente / nada que commitear
+  if [ -z "$(git -C "$tree" status --porcelain)" ]; then
+    specs_err "árbol limpio — no hay cambios para commitear."
+    return 1
+  fi
+
+  # commit único en la worktree (permission ask cubre el acto)
+  git -C "$tree" add -A || return 1
+  local msg
+  msg="$(git -C "$tree" diff --cached --name-only | head -1)"
+  git -C "$tree" commit -m "feat($fid): $(basename "$fdir")" -m "Spec: spec.md + criteria.reg + trace.tsv (verificado por specs gate)." || return 1
+  local sha; sha="$(git -C "$tree" rev-parse --short HEAD)"
+  with_lock "phase" specs_phase_set "$fdir" commit done
+  printf 'specs: COMMIT ÚNICO %s em %s (fase commit=done)\n' "$sha" "$tree"
+
+  # merge a main (mismo acto de aprobación) — fast-forward: 1 commit final
+  git -C "$PROJECT_ROOT" merge --ff-only "spec/$fid" 2>&1 | tail -5 || {
+    specs_err "merge a $mb falhou (não fast-forward — main mudou?). O commit já está na worktree; resolva manualmente."
+    return 1
+  }
+  git -C "$PROJECT_ROOT" worktree remove --force "$tree" 2>/dev/null || true
+  git -C "$PROJECT_ROOT" branch -D "spec/$fid" 2>/dev/null || true
+  printf 'specs: merge a %s ok, worktree removida.\n' "$mb"
+  return 0
 }
 
 # -------------------------------------------------------- spec reconcile
@@ -1043,9 +1389,10 @@ specs_reconcile_one() {
   return $failed
 }
 
-# -------------------------------------------------------- spec gate
+# -------------------------------------------------------- spec audit (gate final antigo)
 
-specs_cmd_gate() {
+# Auditoria final consolidada (modo avançado / fechamento manual de feature).
+specs_cmd_gate_final() {
   specs_require_project || return 1
   local f="${1:-.}"
   local failed=0
