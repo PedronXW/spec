@@ -16,44 +16,44 @@ máquina** (exit code do test runner), não uma frase do agente.
 Você não aprende comando nenhum. Os comandos `specs …` internos são executados
 pelo agente, que **cola a prova na conversa**. Você conversa:
 
-> — "Desarrolla la feature de inscrição de alumnos."
+> — "Desenvolva a feature de inscrição de alunos."
 >
-> — (el agente hace preguntas, escribe los tests, implementa, documenta, revisa)
+> — (o agente faz perguntas, escreve os testes, implementa, documenta, revisa)
 >
-> — "Aprobo, commit."  →  un único commit al final, tras tu aprobación.
+> — "Aprovo, commit."  →  um único commit no final, após a sua aprovação.
 >
-> — "Audita lo que se hizo contra la spec."
+> — "Audita o que foi feito contra a spec."
 
-### El pipeline TDD (1 comando, 6 fases, 1 commit)
+### O pipeline TDD (1 comando, 6 fases, 1 commit)
 
 ```
-F0 spec      → entender + hacer preguntas + documentar (spec.md, criteria.reg, A-/Q- resueltas)
-F1 tests     → escribir TESTES ANTES del código (TDD estricto) + registrar prueba por AC
-F2 implement → codar hasta que los tests pasen
-F3 docs      → documentar lo hecho (docs/features/<fid>.md citando cada AC)
-F4 review    → deep review (6 subagentes review-*) + CORREGIR achados
-F5 commit    → presentar diff final → TU aprobación → COMMIT ÚNICO + merge
+F0 spec      → entender + fazer perguntas + documentar (spec.md, criteria.reg, A-/Q- resolvidas)
+F1 tests     → escrever TESTES ANTES do código (TDD estrito) + registrar prova por AC
+F2 implement → codar até os testes passarem
+F3 docs      → documentar o feito (docs/features/<fid>.md citando cada AC)
+F4 review    → deep review (6 subagentes review-*) + CORRIGIR achados
+F5 commit    → apresentar diff final → SUA aprovação → COMMIT ÚNICO + merge
 ```
 
-Una spec = una worktree = un diff = **un commit final**. Nada se commitea
-antes de tu aprobación explícita (el permission `ask` del opencode cubre el acto).
-Puedes abrir varias specs a la vez (cada una en su worktree), pero cada una sigue
-este pipeline lineal.
+Uma spec = uma worktree = um diff = **um commit final**. Nada é commitado antes
+da sua aprovação explícita (o permission `ask` do opencode cobre o ato). Você
+pode abrir várias specs ao mesmo tempo (cada uma na sua worktree), mas cada uma
+segue este pipeline linear.
 
-Lo que recibes siempre en portugués simple:
+O que você recebe sempre em português simples:
 
-- **Especificación legible** en `.spec/features/<feature>/` — historias, criterios,
-  suposiciones y preguntas **resueltas** antes de avanzar.
-- **Preguntas del agente**: entiende la spec y te pregunta lo que necesita
-  documentar — nada se asume en silencio.
-- **TDD estricto**: los tests se escriben primero y son la spec ejecutable;
-  cada criterio (AC) ↔ un test que pasa.
-- **Deep review automático** (seguridad, performance, corretud, calidad, tests,
-  compat) con auto-corrección transparente de los achados.
-- **La prueba**: auditoría mecánica — cada criterio tiene un test que pasó.
-  Veredicto = exit code, no frase.
-- **Commit gated**: el diff final se te presenta y **solo con tu aprobación**
-  se hace el commit único + merge.
+- **Especificação legível** em `.spec/features/<feature>/` — histórias, critérios,
+  suposições e perguntas **resolvidas** antes de avançar.
+- **Perguntas do agente**: entende a spec e te pergunta o que precisa
+  documentar — nada é assumido em silêncio.
+- **TDD estrito**: os testes são escritos primeiro e são a spec executável;
+  cada critério (AC) ↔ um teste que passa.
+- **Deep review automático** (segurança, performance, corretude, qualidade, testes,
+  compat) com auto-correção transparente dos achados.
+- **A prova**: auditoria mecânica — cada critério tem um teste que passou.
+  Veredito = exit code, não frase.
+- **Commit gated**: o diff final é apresentado a você e **só com a sua aprovação**
+  é feito o commit único + merge.
 
 ---
 
@@ -61,10 +61,10 @@ Lo que recibes siempre en portugués simple:
 
 | Garantia | Como |
 |----------|------|
-| Rastreabilidade de ponta a ponta | cada história, critério e tarefa tem código; cada AC apunta o teste que o prova (`criteria.reg` + `trace.tsv`) |
+| Rastreabilidade de ponta a ponta | cada história, critério e tarefa tem código; cada AC aponta o teste que o prova (`criteria.reg` + `trace.tsv`) |
 | "Pronto" é veredito da máquina | `specs proof`/`specs gate` decidem; teste pulado não conta |
-| Nenhún commit sem sua aprobación | pipeline F5: diff presentado → `--approve` → commit único; permission `ask` cobre o ato |
-| TDD estrito | testes escritos antes do código; gate `tests` exige mapeo AC→test |
+| Nenhum commit sem sua aprovação | pipeline F5: diff apresentado → `--approve` → commit único; permission `ask` cobre o ato |
+| TDD estrito | testes escritos antes do código; gate `tests` exige mapeamento AC→test |
 | Revisão verifica padrão de código | deep review (subagentes `review-*`); `changes-required` bloqueia o gate `review` |
 | Auto-correção transparente | achados corrigidos na spec (máx. 3 iterações), sempre reportando o quê/porquê |
 | Suposições/perguntas obrigatórias | A-/Q- **resolvidas** na F0; feature não fecha com abertas |
@@ -90,6 +90,12 @@ Uso no opencode: `/specs`, `/specs-develop`, `/specs-spec`, `/specs-status`,
 `/specs-review`, `/specs-audit`, `/specs-resolve`, `/specs-lesson`,
 `/specs-constitution`. (Modo avançado: `/specs-plan`, `/specs-run`,
 `/specs-redo`.)
+
+O `install.sh` também instala o **sistema de revisão automática** que o pipeline
+F4 usa: o orquestrador `/review` e os 6 subagentes `review-*`
+(`security`, `performance`, `correctness`, `quality`, `tests`, `compat`).
+Eles são versionados neste repo (`commands/review.md`, `agents/review-*.md`) e
+instalados em `~/.config/opencode/{command,agent}/`.
 
 ## Começar um projeto
 
@@ -133,6 +139,8 @@ Veja `docs/example/F-001-inscricao-de-alunos/` para uma feature completa.
 ## Desenvolvimento
 
 - `bin/specs` + `lib/specs.sh` (núcleo) + `lib/commands.sh` (subcomandos).
+- `commands/specs-*.md` + `commands/review.md` (comandos opencode) e
+  `agents/review-*.md` (6 subagentes do deep review) — instalados pelo `install.sh`.
 - `make test` = lint + `tests/smoke.sh` + `tests/smoke-parallel.sh` (tudo num golpe).
 - `tests/smoke.sh` cobre o pipeline (spec-open → gates TDD → review → commit único
   gated) + garantias (drift, strict-skip, review, gate com constituição).

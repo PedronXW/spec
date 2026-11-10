@@ -332,14 +332,14 @@ USO:
   specs spec-open <nome> [<slug>]      ABRE a spec: feature + worktree ÚNICA + phase.tsv
   specs phase <f>                      mostra fases (spec|tests|implement|docs|review|commit)
   specs phase <f> <fase> <status>      atualiza fase (lock)
-  specs gate <f> [<fase>]              gate da fase atual (ordem forzada, exit code)
-  specs commit <f>                     presenta diff final e estado do pipeline
-  specs commit <f> --approve           faz o COMMIT ÚNICO (aprovación tuya) + merge
+  specs gate <f> [<fase>]              gate da fase atual (ordem forçada, exit code)
+  specs commit <f>                     apresenta diff final e estado do pipeline
+  specs commit <f> --approve           faz o COMMIT ÚNICO (aprovação sua) + merge
   specs plan-check [<f>]               auditoria mecânica do plano (modo avançado)
   specs track <f> <T-id> [--clean]     abre janela limpa (modo avançado)
   specs state <f> <T-id> <status> [branch [sha]]   atualiza estado (lock, avançado)
   specs integrate <f> <T-id>           integra janela (modo avançado)
-  specs auto-review <f> <T-id>         veredito MECÁNICO da janela (modo avançado)
+  specs auto-review <f> <T-id>         veredito MECÂNICO da janela (modo avançado)
   specs review <f> <T-id>              mostra diff + status de revisão
   specs review <f> <T-id> --approve|--reject   grava decisão sua (lock)
   specs prove [--strict] <f> <AC-id> <cmd> <T-id>   registra prova de critério (lock)
@@ -353,8 +353,8 @@ USO:
   specs help
 
 PIPELINE (fluxo padrão, sequencial): spec → tests → implement → docs → review → commit
-  - nenhun commit/merge antes de `specs commit --approve` (e permission ask).
-  - `specs gate <f>` força la ordem: não salta fase sem gate anterior done.
+  - nenhum commit/merge antes de `specs commit --approve` (e permission ask).
+  - `specs gate <f>` força a ordem: não pula fase sem gate anterior done.
 
 ESTADOS DE TAREFA (modo avançado): planned | running | done | failed | integrated
 REVISÃO: status(open|approved|rejected) · auto(not-run|auto-ok|auto-issues) · deep(not-run|approved|approved-suggestions|changes-required) · fixes(n)

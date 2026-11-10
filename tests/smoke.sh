@@ -4,6 +4,7 @@
 set -uo pipefail
 
 SPECS_BIN="${SPECS_BIN:-$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../bin" && pwd)/specs}"
+REPO="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -11,6 +12,13 @@ cd "$TMP"
 
 fail() { echo "SMOKE FAIL: $1" >&2; exit 1; }
 step_ok() { echo "  ok: $1"; }
+
+echo "== sistema de revisão versionado (orquestrador + 6 subagentes) =="
+[ -f "$REPO/commands/review.md" ] || fail "commands/review.md ausente"
+for a in security performance correctness quality tests compat; do
+  [ -f "$REPO/agents/review-$a.md" ] || fail "agents/review-$a.md ausente"
+done
+step_ok "review.md + agents/review-{security,performance,correctness,quality,tests,compat}.md"
 
 git init -q . || fail "git init"
 git config user.email smoke@test

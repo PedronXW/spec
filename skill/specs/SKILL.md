@@ -70,7 +70,9 @@ F5 commit    → specs commit <f> (diff final) → PEDIR APROVAÇÃO → --appro
 diff `git diff <base>...spec/<fid>`; consolide relatório estilo PR
 (`APPROVED | CHANGES REQUIRED | APPROVED WITH SUGGESTIONS` + severidade
 `file:line`); **corrija** os achados; grave `specs review <f> T-SPEC --deep=<verdict>`.
-Constituição também é verificada.
+Constituição também é verificada. O orquestrador do deep review é o comando
+`/review` (com os subagentes `agents/review-*.md` deste repo), que detecta a
+base, calcula o escopo, roda os checks rápidos e consolida o relatório único.
 
 **F5 — Commit final** — `specs commit <f>` apresenta o diff; **PARE e peça a
 aprovação**; com "aprovado": `specs review <f> T-SPEC --approve` e

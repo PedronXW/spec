@@ -19,7 +19,7 @@ echo "✓ lint OK"
 BIN_DIR="${SPECS_BIN_DIR:-$HOME/.local/bin}"
 CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/opencode"
 
-mkdir -p "$BIN_DIR" "$CONF_DIR/skills" "$CONF_DIR/command"
+mkdir -p "$BIN_DIR" "$CONF_DIR/skills" "$CONF_DIR/command" "$CONF_DIR/agent"
 
 ln -sfn "$SRC/bin/specs" "$BIN_DIR/specs"
 ln -sfn "$SRC/skill/specs" "$CONF_DIR/skills/specs"
@@ -28,10 +28,16 @@ for c in "$SRC"/commands/specs-*.md; do
   ln -sfn "$c" "$CONF_DIR/command/$(basename "$c")"
 done
 ln -sfn "$SRC/commands/specs.md" "$CONF_DIR/command/specs.md"
+ln -sfn "$SRC/commands/review.md" "$CONF_DIR/command/review.md"
+for a in "$SRC"/agents/review-*.md; do
+  [ -e "$a" ] || continue
+  ln -sfn "$a" "$CONF_DIR/agent/$(basename "$a")"
+done
 
 echo "✓ CLI  -> $BIN_DIR/specs"
 echo "✓ skill-> $CONF_DIR/skills/specs"
-echo "✓ cmds -> $CONF_DIR/command/specs*.md"
+echo "✓ cmds -> $CONF_DIR/command/specs*.md + review.md"
+echo "✓ agents-> $CONF_DIR/agent/review-*.md"
 
 # permission: gate de revisão (nenhum commit/merge/push sem ask)
 apply_permission() {
