@@ -9,6 +9,12 @@ usuário em prova mecânica, **nunca em opinião**.
 
 $ARGUMENTS
 
+**Identificador (`<f>`):** se o pedido trouxer um id (ex.: `--id JIRA-452`,
+`id JIRA-452`, `ticket JIRA-452`), use SEMPRE `specs spec-open "<nome>" --id <id>`
+e propague esse id em todos os comandos subsequentes (`specs gate <id> …`,
+`specs prove <id> …`, `specs commit <id> …`) — nunca o troque por `F-###`.
+Sem id informado, o sistema gera `F-###` automático.
+
 Fase o pedido:
 - "desenvolv/desarrolla/implementa X" → `/specs-develop` (pipeline TDD completo).
 - "especifica X" → Fase 0 (Especificação): `specs spec-open` (pergunte pelo

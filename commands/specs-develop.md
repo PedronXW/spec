@@ -8,6 +8,11 @@ Carregue a skill `specs` e execute o **pipeline sequencial** da spec.
 
 $ARGUMENTS
 
+**Identificador (`<f>`):** se os argumentos (ou o pedido) tiverem um id (ex.:
+`--id JIRA-452`), passe-o em `specs spec-open "<nome>" --id <id>` na abertura e
+use esse mesmo id em TODOS os comandos do pipeline (`specs gate <id> …`,
+`specs prove <id> …`). Sem id, o sistema gera `F-###` automático.
+
 ## Seu papel
 Executar fase a fase, **colando a prova (exit code) de cada gate** na conversa.
 Nada é commitado antes da aprovação final do usuário.
