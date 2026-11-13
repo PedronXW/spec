@@ -7,10 +7,13 @@ lint:
 smoke:
 	bash tests/smoke.sh
 
+smoke-custom-id:
+	bash tests/smoke-custom-id.sh
+
 smoke-parallel:
 	bash tests/smoke-parallel.sh
 
-test: lint smoke smoke-parallel
+test: lint smoke smoke-custom-id smoke-parallel
 	@echo "ALL GREEN"
 
 install: lint

@@ -9,7 +9,9 @@ Carregue a skill `specs` e execute a **Fase 1 (Especificação)**.
 $ARGUMENTS
 
 Passos:
-1. Nomeie a feature (peça se não foi dada): `specs new "nome da feature"`.
+1. Nomeie a feature (peça se não foi dada) e **pergunte pelo identificador do
+   board/sistema externo** se existir: `specs new "nome da feature" --id <ticket>`
+   (sem `--id`, o sistema gera `F-###`). O id é a âncora em sistemas externos.
 2. Escreva `spec.md` LEGÍVEL: histórias de usuário `U-###` (ator/ação/motivo;
    detalhe técnico entre parênteses) e referências aos critérios `AC-###`.
 3. Registre em `criteria.reg`: `AC-id`, `U-id`, descrição, dono `T-###`.

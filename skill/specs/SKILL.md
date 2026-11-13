@@ -23,7 +23,8 @@ conversa.
 > única) — mas cada uma segue este pipeline linear, sem abrir worktrees por tarefa.
 
 ```
-F0 spec      → entender + FAZER PERGUNTAS + documentar (spec.md, criteria.reg, A-/Q- resolvidas)
+F0 spec      → entender + FAZER PERGUNTAS (incl. identificador `--id` do board)
+              + documentar (spec.md, criteria.reg, A-/Q- resolvidas)
    gate:     specs gate <f> spec → exit 0
 F1 tests     → ESCREVER TESTES ANTES do código (TDD) + specs prove <AC> <cmd> T-SPEC
    gate:     specs gate <f> tests → exit 0
@@ -124,7 +125,7 @@ tarefa), `specs state`, `specs integrate`, `specs auto-review`, `specs review
 | comando | papel |
 |--------|-------|
 | `specs init [--no-constitution]` | cria projeto .spec/ |
-| `specs spec-open <nome> [slug]` | abre spec: feature + worktree ÚNICA + phase.tsv |
+| `specs spec-open <nome> [slug] [--id <id>]` | abre spec: feature + worktree ÚNICA + phase.tsv |
 | `specs phase <f> [fase status]` | mostra/define estado das fases |
 | `specs gate <f> [fase]` | gate da fase pendente (ordem forçada, exit code) |
 | `specs commit <f> [--approve]` | diff final; `--approve` faz COMMIT ÚNICO + merge |

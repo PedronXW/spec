@@ -11,8 +11,9 @@ $ARGUMENTS
 
 Fase o pedido:
 - "desenvolv/desarrolla/implementa X" → `/specs-develop` (pipeline TDD completo).
-- "especifica X" → Fase 0 (Especificação): `specs spec-open` + spec.md/criteria.reg/
-  assumptions.reg; **faça perguntas**; confesse suposições e resolva A-/Q-.
+- "especifica X" → Fase 0 (Especificação): `specs spec-open` (pergunte pelo
+  `--id` do board) + spec.md/criteria.reg/assumptions.reg; **faça perguntas**;
+  confesse suposições e resolva A-/Q-.
 - "escreva testes para X" → Fase 1: testes antes do código + `specs prove` T-SPEC.
 - "implementa/testes passam" → Fase 2: `specs gate <f> implement`.
 - "revisa / deep review" → Fase 4: deep review (6 subagentes) + corrigir achados.

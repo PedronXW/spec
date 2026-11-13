@@ -14,7 +14,9 @@ Nada é commitado antes da aprovação final do usuário.
 
 ## Fases (ordem forçada — `specs gate <f>` não deixa pular)
 
-1. **Abrir**: `specs spec-open "<nome>"` (se ainda não aberta) → worktree ÚNICA da spec.
+1. **Abrir**: `specs spec-open "<nome>" [--id <identificador>]` (se ainda não
+   aberta) → worktree ÚNICA da spec. Se o usuário tiver um id do board/sistema
+   externo, use `--id <ticket>` — é a âncora da feature em sistemas externos.
 2. **F0 spec** (`specs gate <f> spec`):
    - Entenda a spec, **faça perguntas** ao usuário e documente: `spec.md` (histórias U-),
      `criteria.reg` (ACs), `assumptions.reg` (A-/Q- **resolvidas** — nenhuma em aberto).

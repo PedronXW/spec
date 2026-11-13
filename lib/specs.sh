@@ -75,19 +75,19 @@ with_lock() {
 
 # --------------------------------------------------------- localizacao ----
 
-# resolve feature por id ("F-001"), por diretório completo, por prefixo ou
-# por nome com/sem barra final
+# resolve feature por id ("F-001" ou custom "AUTH-1142"), por diretório
+# completo, por prefixo ou por nome com/sem barra final
 specs_feature_dir() {
   local q="$1" d base
   q="${q%/}"
   case "$q" in
     */*) d="$q"; [ -d "$d" ] && { printf '%s' "$d"; return 0; } ;;
   esac
-  for d in "$PROJECT_ROOT/$SPECS_FEATURES_DIR"/F-*/; do
+  for d in "$PROJECT_ROOT/$SPECS_FEATURES_DIR"/*/; do
     [ -d "$d" ] || continue
     base="$(basename "$d")"
     case "$base" in
-      "$q"|"$q-"*|"F-"*/"$q") printf '%s' "${d%/}"; return 0 ;;
+      "$q"|"$q-"*) printf '%s' "${d%/}"; return 0 ;;
     esac
   done
   return 1
@@ -309,7 +309,7 @@ specs_branch_of() { printf 'spec/%s/%s' "$(specs_feature_id "$1")" "$2"; }
 specs_find_feature() {
   local arg="${1:-}" fd
   if [ -z "$arg" ]; then
-    for d in "$PROJECT_ROOT/$SPECS_FEATURES_DIR"/F-*/; do
+    for d in "$PROJECT_ROOT/$SPECS_FEATURES_DIR"/*/; do
       [ -d "$d" ] || continue
       printf '%s' "$d"; return 0
     done
@@ -328,8 +328,8 @@ specs — CLI interno do fluxo spec-anchored (quem executa é o AGENTE).
 
 USO:
   specs init [--no-constitution]       cria .spec/ no diretório atual
-  specs new <nome feature> [<slug>]    cria F-XXX-<slug> + esqueleto
-  specs spec-open <nome> [<slug>]      ABRE a spec: feature + worktree ÚNICA + phase.tsv
+  specs new <nome feature> [<slug>] [--id <id>]    cria [F-XXX|<id>]-<slug> + esqueleto
+  specs spec-open <nome> [<slug>] [--id <id>]      ABRE a spec: feature + worktree ÚNICA + phase.tsv
   specs phase <f>                      mostra fases (spec|tests|implement|docs|review|commit)
   specs phase <f> <fase> <status>      atualiza fase (lock)
   specs gate <f> [<fase>]              gate da fase atual (ordem forçada, exit code)

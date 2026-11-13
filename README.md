@@ -62,6 +62,7 @@ O que você recebe sempre em português simples:
 | Garantia | Como |
 |----------|------|
 | Rastreabilidade de ponta a ponta | cada história, critério e tarefa tem código; cada AC aponta o teste que o prova (`criteria.reg` + `trace.tsv`) |
+| Identificador âncora | feature com `--id <identificador>` (ex.: ticket do board) evita colisão de numeração entre devs e ancora em sistemas externos |
 | "Pronto" é veredito da máquina | `specs proof`/`specs gate` decidem; teste pulado não conta |
 | Nenhum commit sem sua aprovação | pipeline F5: diff apresentado → `--approve` → commit único; permission `ask` cobre o ato |
 | TDD estrito | testes escritos antes do código; gate `tests` exige mapeamento AC→test |
@@ -102,9 +103,15 @@ instalados em `~/.config/opencode/{command,agent}/`.
 ```bash
 cd <seu projeto>
 specs init                                   # cria .spec/ (constituição LGPD/educação)
-specs new "nome da feature"                  # F-001-<slug>
+specs new "nome da feature"                  # F-001-<slug> (auto)
+specs new "nome da feature" --id FIX-123     # identificador próprio (ex.: ticket do board)
 # ...o agente descreve a spec, o plano, executa — tudo via comandos /specs*
 ```
+
+O identificador da feature é `F-###` (automático) ou um valor seu via `--id` —
+use o número do ticket do seu board para ancorar a feature em sistemas externos
+e evitar colisões de numeração entre devs. Referencie sempre o `--id` (ex.:
+`specs gate FIX-123 review`).
 
 ## Estrutura gerada
 
@@ -112,7 +119,7 @@ specs new "nome da feature"                  # F-001-<slug>
 .spec/
   constitution.md    # constituição + verificações executáveis
   lessons.md         # lições com lastro
-  features/F-XXX-<slug>/
+  features/<id>-<slug>/      # id = F-### (auto) ou custom via --id (ex.: FIX-123)
     spec.md            # spec legível (histórias U-, critérios AC-, A-/Q-)
     criteria.reg       # máquina: AC-id → story → descrição → dono
     assumptions.reg    # máquina: A-/Q- → status

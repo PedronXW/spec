@@ -13,13 +13,27 @@ specs_slug() {
 
 specs_next_feature_id() {
   local max=0 d id n
-  for d in "$PROJECT_ROOT/$SPECS_FEATURES_DIR"/F-*/; do
+  for d in "$PROJECT_ROOT/$SPECS_FEATURES_DIR"/F-[0-9]*/; do
     [ -d "$d" ] || continue
     id="$(basename "$d")"
     n="$(printf '%s' "$id" | sed -n 's/^F-\([0-9]*\).*/\1/p')"
     [ -n "$n" ] && [ "$((10#$n))" -gt "$max" ] && max="$((10#$n))"
   done
   printf 'F-%03d' $((max+1))
+}
+
+# valida identificador customizado (flag --id): safe para diretório e branch
+# git; prefixo F-[0-9] é reservado à auto-geração (não misturar namespaces).
+specs_id_valid() {
+  local id="$1"
+  case "$id" in
+    '')                                 return 1 ;;
+    -*|*-)                              return 1 ;;
+    [0-9]*)                            return 1 ;;
+    *[!A-Za-z0-9_-]*)                  return 1 ;;
+  esac
+  case "$id" in F-[0-9]*) return 1 ;; esac
+  return 0
 }
 
 # --------------------------------------------------------------- spec init
@@ -46,7 +60,9 @@ EOF
   cat > "$PWD/$SPECS_FEATURES_DIR/README.md" <<'EOF'
 # Features spec-anchored
 
-Cada feature vive em `F-XXX-<slug>/`. Dentro dela:
+Cada feature vive em `<identificador>-<slug>/` — o identificador é `F-###`
+(automático) ou um ID do usuário (ex.: ticket do board) via `--id`.
+Dentro dela:
 
 - `spec.md` — spec LEGÍVEL: histórias `U-###`, critérios `AC-###` (refs),
   suposições `A-###` e perguntas `Q-###`.
@@ -102,17 +118,22 @@ EOF
 
 # --------------------------------------------------------------- spec new
 
-specs_cmd_new() {
-  specs_require_project || return 1
-  local nome="${1:-}" slug="${2:-}"
-  if [ -z "$nome" ]; then
-    specs_err "use: specs new <nome da feature> [<slug>]"
+# Cria a feature (dir + esqueleto). Com <custom_id> (--id) o identificador é o
+# do usuário (ex.: ticket no board); sem ele, F-### automático. Roda sob lock
+# para que criações concorrentes no mesmo repo não gerem o mesmo F-###.
+specs_feature_create() {
+  local nome="$1" slug="$2" custom_id="$3"
+  local fid fdir
+  if [ -n "$custom_id" ]; then
+    fid="$custom_id"
+  else
+    fid="$(specs_next_feature_id)"
+  fi
+  fdir="$PROJECT_ROOT/$SPECS_FEATURES_DIR/$fid-$slug"
+  if [ -e "$fdir" ]; then
+    specs_err "feature já existe: $fdir (identificador duplicado?)"
     return 1
   fi
-  [ -n "$slug" ] || slug="$(specs_slug "$nome")"
-
-  local fid; fid="$(specs_next_feature_id)"
-  local fdir="$PROJECT_ROOT/$SPECS_FEATURES_DIR/$fid-$slug"
   mkdir -p "$fdir/tasks" || return 1
 
   cat > "$fdir/spec.md" <<EOF
@@ -160,6 +181,35 @@ EOF
   return 0
 }
 
+specs_cmd_new() {
+  specs_require_project || return 1
+  local nome="" slug="" custom_id=""
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --id) custom_id="${2:-}"; shift 2 ;;
+      --id=*) custom_id="${1#--id=}"; shift ;;
+      *)
+        if [ -z "$nome" ]; then nome="$1"
+        elif [ -z "$slug" ]; then slug="$1"
+        else specs_err "argumento extra: $1"; return 1; fi
+        shift ;;
+    esac
+  done
+  if [ -z "$nome" ]; then
+    specs_err "use: specs new <nome da feature> [<slug>] [--id <id>]"
+    return 1
+  fi
+  [ -n "$slug" ] || slug="$(specs_slug "$nome")"
+  if [ -n "$custom_id" ]; then
+    specs_id_valid "$custom_id" || {
+      specs_err "id inválido '$custom_id' (use [A-Za-z0-9_-], sem '-' nas pontas nem dígito inicial; 'F-<número>' é reservado)"
+      return 1
+    }
+  fi
+
+  with_lock "features" specs_feature_create "$nome" "$slug" "$custom_id"
+}
+
 # -------------------------------------------------------- spec spec-open
 
 # Abre uma spec: cria a feature (se não existe), abre SUA worktree única e
@@ -167,9 +217,20 @@ EOF
 specs_cmd_spec_open() {
   specs_require_project || return 1
   specs_require_git || return 1
-  local nome="${1:-}"
+  local nome="" slug="" custom_id=""
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --id) custom_id="${2:-}"; shift 2 ;;
+      --id=*) custom_id="${1#--id=}"; shift ;;
+      *)
+        if [ -z "$nome" ]; then nome="$1"
+        elif [ -z "$slug" ]; then slug="$1"
+        else specs_err "argumento extra: $1"; return 1; fi
+        shift ;;
+    esac
+  done
   if [ -z "$nome" ]; then
-    specs_err "use: specs spec-open <nome da spec> [<slug>]"
+    specs_err "use: specs spec-open <nome da spec> [<slug>] [--id <id>]"
     return 1
   fi
 
@@ -177,13 +238,12 @@ specs_cmd_spec_open() {
   local fdir fd
   fd="$(specs_feature_dir "$nome" 2>/dev/null)"
   if [ -z "$fd" ]; then
-    local slug_arg="${2:-}"
-    specs_cmd_new "$nome" "$slug_arg" || return 1
+    specs_cmd_new "$nome" "$slug" "--id" "$custom_id" || return 1
     fd="$(specs_feature_dir "$nome" 2>/dev/null)"
     if [ -z "$fd" ]; then
       # fallback: última feature creada
       local last
-      last="$(ls -d "$PROJECT_ROOT/$SPECS_FEATURES_DIR"/F-* 2>/dev/null | tail -n1)"
+      last="$(ls -d "$PROJECT_ROOT/$SPECS_FEATURES_DIR"/*/ 2>/dev/null | tail -n1)"
       [ -n "$last" ] && fd="$last"
     fi
   fi
@@ -418,7 +478,7 @@ specs_cmd_plan_check() {
   # resolve features: "." => todas
   local feats=()
   if [ "$mode" = "." ]; then
-    for d in "$PROJECT_ROOT/$SPECS_FEATURES_DIR"/F-*/; do
+    for d in "$PROJECT_ROOT/$SPECS_FEATURES_DIR"/*/; do
       [ -d "$d" ] || continue
       feats+=("$d")
     done
@@ -1084,7 +1144,7 @@ specs_cmd_status() {
   printf '#specs\t%s\n' "$SPECS_VERSION"
 
   local d
-  for d in "$PROJECT_ROOT/$SPECS_FEATURES_DIR"/F-*/; do
+  for d in "$PROJECT_ROOT/$SPECS_FEATURES_DIR"/*/; do
     [ -d "$d" ] || continue
     local fid; fid="$(specs_feature_id "$d")"
     if [ -n "$filter" ]; then
@@ -1163,7 +1223,7 @@ specs_cmd_proof() {
     specs_proof_one "$fd" "$strict" || overall=1
   else
     local d
-    for d in "$PROJECT_ROOT/$SPECS_FEATURES_DIR"/F-*/; do
+    for d in "$PROJECT_ROOT/$SPECS_FEATURES_DIR"/*/; do
       [ -d "$d" ] || continue
       specs_proof_one "$d" "$strict" || overall=1
     done
@@ -1344,7 +1404,7 @@ specs_cmd_reconcile() {
     if [ -z "$d" ]; then specs_err "feature não encontrada: $filter"; return 1; fi
     specs_reconcile_one "$d" || overall=1
   else
-    for d in "$PROJECT_ROOT/$SPECS_FEATURES_DIR"/F-*/; do
+    for d in "$PROJECT_ROOT/$SPECS_FEATURES_DIR"/*/; do
       [ -d "$d" ] || continue
       specs_reconcile_one "$d" || overall=1
     done
@@ -1414,7 +1474,7 @@ specs_cmd_gate_final() {
   # 2. todas as tarefas integradas
   local feats=()
   if [ "$f" = "." ]; then
-    for d in "$PROJECT_ROOT/$SPECS_FEATURES_DIR"/F-*/; do
+    for d in "$PROJECT_ROOT/$SPECS_FEATURES_DIR"/*/; do
       [ -d "$d" ] || continue
       feats+=("$d")
     done
